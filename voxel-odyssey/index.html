@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Voxel Odyssey</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Three.js is loaded from a CDN via an import map. No build step required. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- The WebGL canvas. The engine attaches its renderer here. -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- All HUD / menu DOM is injected by the UI modules into these layers. -->
+  <div id="ui-root">
+    <div id="hud-layer" class="ui-layer"></div>
+    <div id="menu-layer" class="ui-layer"></div>
+  </div>
+
+  <!-- Loading screen, shown until the first chunks are meshed. -->
+  <div id="loading-screen">
+    <div class="loading-inner">
+      <h1 class="logo">VOXEL <span>ODYSSEY</span></h1>
+      <div class="loading-bar"><div id="loading-fill"></div></div>
+      <div id="loading-text">Loading…</div>
+      <div class="loading-tips" id="loading-tip"></div>
+    </div>
+  </div>
+
+  <!-- A fatal-error banner the bootstrap can show if a module fails to load. -->
+  <div id="fatal-error" hidden>
+    <div class="fatal-inner">
+      <h2>Something broke 😢</h2>
+      <pre id="fatal-message"></pre>
+      <p>Open the browser console for the full stack trace.</p>
+    </div>
+  </div>
+
+  <noscript>
+    <div class="noscript">Voxel Odyssey needs JavaScript and WebGL enabled to run.</div>
+  </noscript>
+
+  <script type="module">
+    // Tiny bootstrap shim: surface module load errors on screen instead of a blank page.
+    window.addEventListener('error', (e) => {
+      const box = document.getElementById('fatal-error');
+      const msg = document.getElementById('fatal-message');
+      if (box && msg && e && (e.message || e.error)) {
+        box.hidden = false;
+        msg.textContent = (e.error && e.error.stack) || e.message || String(e);
+      }
+    });
+    import('./js/main.js').catch((err) => {
+      const box = document.getElementById('fatal-error');
+      const msg = document.getElementById('fatal-message');
+      if (box && msg) {
+        box.hidden = false;
+        msg.textContent = (err && err.stack) || String(err);
+      }
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

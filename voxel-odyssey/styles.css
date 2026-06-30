@@ -1,0 +1,378 @@
+/* =========================================================================
+   Voxel Odyssey — stylesheet
+   Covers: layout, loading screen, HUD, hotbar, menus, inventory/crafting,
+   settings, buttons, and assorted overlays. Pixel-ish, dark, cozy.
+   ========================================================================= */
+
+:root {
+  --bg: #0b1020;
+  --panel: rgba(18, 24, 38, 0.92);
+  --panel-2: rgba(28, 36, 56, 0.92);
+  --ink: #e7ecff;
+  --ink-dim: #9aa6c8;
+  --accent: #6ad36a;
+  --accent-2: #58c0ff;
+  --danger: #ff5b6e;
+  --gold: #ffce54;
+  --slot: rgba(10, 14, 24, 0.78);
+  --slot-border: rgba(255, 255, 255, 0.12);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --font: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: linear-gradient(#8fc7ff, #cfe8ff);
+  image-rendering: auto;
+}
+
+/* ---- UI layers --------------------------------------------------------- */
+#ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+.ui-layer { position: absolute; inset: 0; }
+#hud-layer { z-index: 11; }
+#menu-layer { z-index: 20; }
+
+/* Things that should catch clicks opt back in. */
+.clickable, button, input, .slot, .menu-panel, .tab { pointer-events: auto; }
+
+/* ---- Loading screen ---------------------------------------------------- */
+#loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #1b2748, #0b1020 70%);
+  transition: opacity 0.6s ease;
+}
+#loading-screen.hidden { opacity: 0; pointer-events: none; }
+.loading-inner { text-align: center; width: min(520px, 86vw); }
+.logo {
+  font-size: clamp(34px, 7vw, 64px);
+  letter-spacing: 6px;
+  margin: 0 0 28px;
+  text-shadow: 0 4px 0 #000a, 0 0 24px #58c0ff55;
+}
+.logo span { color: var(--accent); }
+.loading-bar {
+  height: 14px;
+  border-radius: 8px;
+  background: #0006;
+  border: 1px solid var(--slot-border);
+  overflow: hidden;
+}
+#loading-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.25s ease;
+}
+#loading-text { margin-top: 14px; color: var(--ink-dim); font-size: 14px; }
+.loading-tips {
+  margin-top: 22px;
+  color: var(--ink-dim);
+  font-style: italic;
+  font-size: 13px;
+  min-height: 18px;
+}
+
+/* ---- Fatal error ------------------------------------------------------- */
+#fatal-error {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: #0b1020ee;
+}
+.fatal-inner {
+  background: var(--panel); border: 1px solid var(--danger);
+  border-radius: 12px; padding: 24px; max-width: 760px; width: 90vw;
+  box-shadow: var(--shadow);
+}
+.fatal-inner h2 { margin: 0 0 12px; color: var(--danger); }
+.fatal-inner pre {
+  white-space: pre-wrap; word-break: break-word;
+  background: #0008; padding: 12px; border-radius: 8px;
+  max-height: 40vh; overflow: auto; font-size: 12px; color: #ffd;
+}
+
+.noscript {
+  position: fixed; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 20px; padding: 24px; text-align: center;
+}
+
+/* ---- Crosshair --------------------------------------------------------- */
+#crosshair {
+  position: absolute; left: 50%; top: 50%;
+  width: 22px; height: 22px; transform: translate(-50%, -50%);
+  pointer-events: none; mix-blend-mode: difference; opacity: 0.9;
+}
+#crosshair::before, #crosshair::after {
+  content: ""; position: absolute; background: #fff;
+}
+#crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+#crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+
+/* ---- Hotbar ------------------------------------------------------------ */
+#hotbar {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  display: flex; gap: 6px; padding: 6px;
+  background: var(--panel); border-radius: 12px; border: 1px solid var(--slot-border);
+  box-shadow: var(--shadow);
+}
+.slot {
+  position: relative; width: 52px; height: 52px;
+  background: var(--slot); border: 2px solid var(--slot-border);
+  border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  transition: transform 0.08s ease, border-color 0.08s ease;
+}
+.slot.selected { border-color: var(--gold); transform: translateY(-4px); box-shadow: 0 0 0 2px #ffce5455; }
+.slot canvas, .slot img { width: 40px; height: 40px; image-rendering: pixelated; }
+.slot .count {
+  position: absolute; right: 3px; bottom: 1px; font-size: 13px; font-weight: bold;
+  color: #fff; text-shadow: 1px 1px 0 #000, -1px 1px 0 #000;
+}
+.slot .key {
+  position: absolute; left: 3px; top: 1px; font-size: 10px; color: var(--ink-dim);
+}
+.slot.drag-over { border-color: var(--accent-2); }
+
+/* ---- Health / status bars --------------------------------------------- */
+#status-bars {
+  position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 4px; align-items: center;
+}
+.bar-row { display: flex; gap: 3px; }
+.pip { width: 16px; height: 16px; filter: drop-shadow(1px 1px 0 #0008); }
+.pip svg { width: 100%; height: 100%; }
+
+/* ---- Clock / info ------------------------------------------------------ */
+#info-panel {
+  position: absolute; left: 12px; top: 12px;
+  background: var(--panel); border: 1px solid var(--slot-border); border-radius: 10px;
+  padding: 8px 12px; font-size: 12px; color: var(--ink-dim); line-height: 1.5;
+  min-width: 150px; box-shadow: var(--shadow);
+}
+#info-panel b { color: var(--ink); }
+#info-panel.hidden { display: none; }
+
+#clock {
+  position: absolute; right: 12px; top: 12px;
+  background: var(--panel); border: 1px solid var(--slot-border); border-radius: 999px;
+  width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow);
+}
+#clock canvas { width: 56px; height: 56px; }
+
+/* ---- Toasts / messages ------------------------------------------------- */
+#toast-wrap {
+  position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 6px; align-items: center;
+}
+.toast {
+  background: var(--panel-2); border: 1px solid var(--slot-border); border-radius: 8px;
+  padding: 6px 14px; font-size: 13px; color: var(--ink);
+  animation: toast-in 0.25s ease, toast-out 0.4s ease forwards;
+  animation-delay: 0s, 2.2s;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px);} to {opacity:1; transform:none;} }
+@keyframes toast-out { to { opacity: 0; transform: translateY(-8px);} }
+
+#hotbar-label {
+  position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%);
+  font-size: 14px; color: #fff; text-shadow: 1px 1px 0 #000; opacity: 0;
+  transition: opacity 0.3s ease; pointer-events: none;
+}
+#hotbar-label.show { opacity: 1; }
+
+/* ---- Damage / underwater overlays ------------------------------------- */
+#screen-overlay {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  transition: opacity 0.2s ease;
+}
+#screen-overlay.hurt { background: radial-gradient(transparent 40%, #ff000066); opacity: 1; }
+#screen-overlay.water { background: #1f5fae55; opacity: 1; }
+
+/* ---- Menus (generic) --------------------------------------------------- */
+.menu-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(6, 9, 18, 0.6); backdrop-filter: blur(3px);
+}
+.menu-overlay.fullscreen { background: radial-gradient(1200px 700px at 50% -10%, #16203c, #070b16 75%); }
+.menu-panel {
+  background: var(--panel); border: 1px solid var(--slot-border); border-radius: 16px;
+  padding: 26px 30px; width: min(560px, 92vw); box-shadow: var(--shadow);
+  max-height: 90vh; overflow: auto;
+}
+.menu-panel h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: 2px; }
+.menu-panel h2 { margin: 18px 0 10px; font-size: 18px; color: var(--accent-2); }
+.menu-panel .subtitle { color: var(--ink-dim); margin: 0 0 18px; font-size: 14px; }
+
+.btn {
+  display: block; width: 100%; margin: 8px 0; padding: 12px 16px;
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--slot-border);
+  border-radius: 10px; font-size: 16px; font-family: var(--font); cursor: pointer;
+  transition: transform 0.06s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.btn:hover { background: #33415f; border-color: var(--accent-2); }
+.btn:active { transform: scale(0.985); }
+.btn.primary { background: linear-gradient(90deg, #2f7a3a, #3aa14a); border-color: #4cd366; }
+.btn.primary:hover { background: linear-gradient(90deg, #357f40, #43b554); }
+.btn.danger { border-color: var(--danger); }
+.btn.row { display: inline-block; width: auto; margin: 6px 6px 0 0; }
+.btn.small { padding: 7px 12px; font-size: 13px; }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.row.between { justify-content: space-between; }
+.spacer { flex: 1; }
+
+/* ---- Settings controls ------------------------------------------------- */
+.setting { margin: 12px 0; }
+.setting label { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; }
+.setting label .val { color: var(--accent); }
+input[type="range"] {
+  width: 100%; -webkit-appearance: none; appearance: none; height: 6px;
+  border-radius: 4px; background: #0008; outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid #fff3;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%; background: var(--accent);
+  cursor: pointer; border: 2px solid #fff3;
+}
+.toggle {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;
+}
+.toggle .box {
+  width: 42px; height: 24px; border-radius: 999px; background: #0008; position: relative;
+  border: 1px solid var(--slot-border); transition: background 0.15s ease;
+}
+.toggle .box::after {
+  content: ""; position: absolute; left: 2px; top: 1px; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--ink-dim); transition: left 0.15s ease, background 0.15s ease;
+}
+.toggle.on .box { background: #2f7a3a; }
+.toggle.on .box::after { left: 19px; background: #fff; }
+
+.select {
+  background: #0008; color: var(--ink); border: 1px solid var(--slot-border);
+  border-radius: 8px; padding: 6px 10px; font-family: var(--font); font-size: 14px;
+}
+
+/* ---- Inventory / crafting screen -------------------------------------- */
+#inventory-screen .menu-panel { width: min(720px, 96vw); }
+.inv-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; margin: 10px 0; }
+.inv-grid.main { margin-bottom: 16px; }
+.craft-area { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.craft-grid { display: grid; gap: 6px; }
+.craft-grid.g3 { grid-template-columns: repeat(3, 1fr); }
+.craft-grid.g2 { grid-template-columns: repeat(2, 1fr); }
+.craft-arrow { font-size: 28px; color: var(--ink-dim); }
+.craft-out .slot { width: 60px; height: 60px; border-color: var(--gold); }
+.section-title { font-size: 13px; color: var(--ink-dim); margin: 14px 0 4px; letter-spacing: 1px; }
+
+.recipe-book { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; }
+.recipe-book .slot { width: 44px; height: 44px; cursor: pointer; }
+.recipe-book .slot:hover { border-color: var(--accent-2); }
+
+/* Tooltip following the cursor in menus */
+#tooltip {
+  position: fixed; z-index: 9000; pointer-events: none;
+  background: var(--panel-2); border: 1px solid var(--slot-border); border-radius: 8px;
+  padding: 6px 10px; font-size: 13px; color: var(--ink); box-shadow: var(--shadow);
+  max-width: 240px; display: none;
+}
+#tooltip .t-name { font-weight: bold; }
+#tooltip .t-desc { color: var(--ink-dim); font-size: 12px; margin-top: 2px; }
+
+/* Item that follows the cursor while dragging in the inventory */
+#drag-ghost {
+  position: fixed; z-index: 9500; pointer-events: none; width: 44px; height: 44px;
+  display: none; transform: translate(-50%, -50%);
+}
+#drag-ghost canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+#drag-ghost .count {
+  position: absolute; right: 0; bottom: 0; font-size: 12px; font-weight: bold; color: #fff;
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* ---- Pause / death ----------------------------------------------------- */
+.center-stack { display: flex; flex-direction: column; align-items: stretch; }
+.death-title { color: var(--danger); text-align: center; }
+.big-stat { font-size: 13px; color: var(--ink-dim); text-align: center; margin-bottom: 14px; }
+
+/* ---- Controls help table ---------------------------------------------- */
+.controls-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.controls-table td { padding: 5px 8px; border-bottom: 1px solid #ffffff10; }
+.controls-table td:first-child { color: var(--accent-2); white-space: nowrap; width: 40%; }
+kbd {
+  background: #0008; border: 1px solid var(--slot-border); border-bottom-width: 2px;
+  border-radius: 5px; padding: 1px 7px; font-family: monospace; font-size: 12px;
+}
+
+/* ---- Debug overlay ----------------------------------------------------- */
+#debug {
+  position: absolute; left: 12px; top: 120px; font-family: monospace; font-size: 11px;
+  color: #bfe; text-shadow: 1px 1px 0 #000; line-height: 1.45; white-space: pre;
+  pointer-events: none; display: none;
+}
+#debug.show { display: block; }
+
+/* ---- Mobile controls (shown only on touch) ---------------------------- */
+#touch-controls { display: none; }
+body.touch #touch-controls { display: block; }
+.touch-stick {
+  position: absolute; bottom: 24px; left: 24px; width: 120px; height: 120px;
+  border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff22; pointer-events: auto;
+}
+.touch-stick .nub {
+  position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: #ffffff33; border: 2px solid #ffffff44;
+}
+.touch-btn {
+  position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%;
+  background: #ffffff18; border: 2px solid #ffffff28; color: #fff; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+}
+#touch-jump { right: 28px; bottom: 110px; }
+#touch-place { right: 100px; bottom: 40px; }
+#touch-break { right: 28px; bottom: 40px; }
+
+/* ---- Misc helpers ------------------------------------------------------ */
+.hidden { display: none !important; }
+.fade { transition: opacity 0.3s ease; }
+.muted { color: var(--ink-dim); }
+.tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #ffffff14; color: var(--ink-dim); margin-left: 6px;
+}
+.kv { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.kv span:last-child { color: var(--ink); }
+hr.sep { border: none; border-top: 1px solid #ffffff12; margin: 16px 0; }
+
+/* Scrollbar polish */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
