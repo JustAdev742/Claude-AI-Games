@@ -1,0 +1,601 @@
+/* =========================================================================
+   world.js — chunk storage, streaming, meshing, edits, and raycasting.
+
+   The World owns every loaded Chunk (procedural data) and its matching set of
+   THREE.Mesh objects (rendered geometry). It is the single authority that
+   other systems (player, entities, particles) talk to when they need to read
+   or change a voxel.
+
+   Responsibilities:
+     - Stream chunks in/out around an anchor (the player) by render distance.
+     - Generate chunk voxel data on demand via game.worldgen (deterministic).
+     - Re-apply player edits (block diffs) so saves are tiny (seed + diffs).
+     - Mesh chunks off the critical path with a bounded, nearest-first queue.
+     - Build/replace/dispose THREE.BufferGeometry without leaking GPU memory.
+     - Provide getBlock/setBlock, isSolid/isLiquid, heightAt, spawn helpers,
+       and a voxel-DDA raycast for the player's reach.
+
+   Coordinate conventions match the rest of the game: +Y is up, a block at
+   integer (x,y,z) occupies the unit cube [x,x+1]×[y,y+1]×[z,z+1]. Chunk
+   meshes are parented at the chunk origin (cx*16, 0, cz*16); the mesher emits
+   chunk-local positions so we only translate, never bake world offsets in.
+   ========================================================================= */
+
+import * as THREE from 'three';
+import { Chunk, meshChunk } from './chunk.js';
+import {
+  CHUNK_SX, CHUNK_SY, CHUNK_SZ, WATER_LEVEL,
+  localIndex, worldToChunk,
+} from './constants.js';
+import Blocks, { ID } from './blocks.js';
+import { chunkKey, voxelKey, clamp } from '../core/utils.js';
+
+export class World {
+  constructor(game) {
+    this.game = game;
+
+    // cx/cz already convenient via worldToChunk; cache the THREE namespace we
+    // were given so we don't import twice in spirit (we still import * here for
+    // geometry construction, but honor game.THREE when present).
+    this.THREE = (game && game.THREE) || THREE;
+
+    this.seed = 0;
+
+    // Chunk data + their rendered meshes, keyed by chunkKey(cx,cz).
+    this.chunks = new Map();   // chunkKey -> Chunk
+    this.meshes = new Map();   // chunkKey -> { opaque, water, cross } of THREE.Mesh|null
+
+    // Player edits as a flat diff map so we can persist + re-apply over fresh
+    // procedural generation. Key is voxelKey(x,y,z), value is the block id.
+    this.edits = new Map();    // voxelKey -> id
+
+    // Remesh work queue: chunkKeys waiting to (re)build geometry. We keep a Set
+    // for dedupe and sort by distance to the anchor each frame.
+    this.remeshQueue = new Set();
+
+    // Shared materials, created in init().
+    this.matOpaque = null;
+    this.matWater = null;
+    this.matCross = null;
+
+    // Streaming bookkeeping.
+    this._anchorCX = 0;
+    this._anchorCZ = 0;
+    this._primed = false;      // becomes true once the spawn ring has meshed
+    this._readyEmitted = false;
+    this._lastProgress = -1;
+
+    // A reusable scratch group? We parent meshes directly to scene for clarity.
+  }
+
+  /* ---- lifecycle -------------------------------------------------------- */
+
+  init() {
+    const T = this.THREE;
+    // Three shared MeshLambertMaterials. Lighting is provided by Sky
+    // (hemisphere + sun directional); these only carry vertex colors + AO.
+    this.matOpaque = new T.MeshLambertMaterial({ vertexColors: true });
+    this.matWater = new T.MeshLambertMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    });
+    this.matCross = new T.MeshLambertMaterial({
+      vertexColors: true,
+      side: T.DoubleSide,
+      alphaTest: 0.1,
+      transparent: false,
+    });
+    return this;
+  }
+
+  reset(seed) {
+    // Tear down every loaded chunk + mesh and clear edits, then set the seed.
+    for (const key of [...this.meshes.keys()]) this._disposeMeshSet(key);
+    this.meshes.clear();
+    this.chunks.clear();
+    this.edits.clear();
+    this.remeshQueue.clear();
+
+    this.seed = seed | 0;
+    this._primed = false;
+    this._readyEmitted = false;
+    this._lastProgress = -1;
+    this._anchorCX = 0;
+    this._anchorCZ = 0;
+
+    // Keep worldgen in sync if available.
+    const wg = this.game && this.game.worldgen;
+    if (wg && typeof wg.setSeed === 'function') {
+      try { wg.setSeed(this.seed); } catch (_) { /* defensive */ }
+    }
+  }
+
+  /* ---- chunk access ----------------------------------------------------- */
+
+  getChunk(cx, cz) {
+    return this.chunks.get(chunkKey(cx, cz)) || null;
+  }
+
+  // Create + generate + apply in-range edits for a chunk if it isn't loaded.
+  // Generation is deterministic and cheap, so calling this from getBlock to
+  // furnish neighbour data for border meshing is safe.
+  ensureChunk(cx, cz) {
+    const key = chunkKey(cx, cz);
+    let chunk = this.chunks.get(key);
+    if (chunk) return chunk;
+
+    chunk = new Chunk(cx, cz);
+    this.chunks.set(key, chunk);
+
+    // Fill voxel data via worldgen (guarded — worldgen may not be ready yet).
+    const wg = this.game && this.game.worldgen;
+    if (wg && typeof wg.generateChunk === 'function') {
+      try { wg.generateChunk(chunk); } catch (err) {
+        console.error('worldgen.generateChunk failed', err);
+      }
+    }
+    chunk.generated = true;
+
+    // Overlay any saved/player edits that fall inside this chunk's columns.
+    this._applyEditsInChunk(chunk);
+
+    chunk.dirty = true;
+    return chunk;
+  }
+
+  // Re-apply every stored edit whose (x,z) lands in this chunk. Edits are kept
+  // as world coords so they survive regeneration regardless of load order.
+  _applyEditsInChunk(chunk) {
+    if (this.edits.size === 0) return;
+    const baseX = chunk.cx * CHUNK_SX;
+    const baseZ = chunk.cz * CHUNK_SZ;
+    for (const [k, id] of this.edits) {
+      const c = k.indexOf(',');
+      const c2 = k.indexOf(',', c + 1);
+      const x = +k.slice(0, c);
+      const y = +k.slice(c + 1, c2);
+      const z = +k.slice(c2 + 1);
+      if (x < baseX || x >= baseX + CHUNK_SX) continue;
+      if (z < baseZ || z >= baseZ + CHUNK_SZ) continue;
+      if (y < 0 || y >= CHUNK_SY) continue;
+      chunk.setLocal(x - baseX, y, z - baseZ, id);
+    }
+  }
+
+  /* ---- voxel read/write ------------------------------------------------- */
+
+  getBlock(wx, wy, wz) {
+    wx |= 0; wy |= 0; wz |= 0;
+    // Everything above/below the world column is air. Generation handles
+    // bedrock at the bottom, so out-of-range reads are simply empty.
+    if (wy < 0 || wy >= CHUNK_SY) return ID.AIR;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    // ensureChunk on demand so meshing a border face always sees a neighbour.
+    const chunk = this.ensureChunk(cx, cz);
+    const lx = wx - cx * CHUNK_SX;
+    const lz = wz - cz * CHUNK_SZ;
+    return chunk.getLocal(lx, wy, lz);
+  }
+
+  setBlock(wx, wy, wz, id, opts = {}) {
+    wx |= 0; wy |= 0; wz |= 0; id |= 0;
+    if (wy < 0 || wy >= CHUNK_SY) return false;
+
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const chunk = this.ensureChunk(cx, cz);
+    const lx = wx - cx * CHUNK_SX;
+    const lz = wz - cz * CHUNK_SZ;
+
+    const prev = chunk.getLocal(lx, wy, lz);
+    if (prev === id) return false; // no-op; nothing changed
+
+    // Write the voxel and record the diff so it survives save/regeneration.
+    chunk.setLocal(lx, wy, lz, id);
+    this.edits.set(voxelKey(wx, wy, wz), id);
+
+    // Mark this chunk dirty + queue a remesh.
+    chunk.dirty = true;
+    this._queueRemesh(cx, cz);
+
+    // If the edit sits on a chunk border, the neighbour's border faces may
+    // change too — dirty + remesh it as well.
+    if (lx === 0) this._dirtyNeighbour(cx - 1, cz);
+    if (lx === CHUNK_SX - 1) this._dirtyNeighbour(cx + 1, cz);
+    if (lz === 0) this._dirtyNeighbour(cx, cz - 1);
+    if (lz === CHUNK_SZ - 1) this._dirtyNeighbour(cx, cz + 1);
+
+    // Notify the rest of the game.
+    const events = this.game && this.game.events;
+    if (events) {
+      events.emit('block:update', { x: wx, y: wy, z: wz });
+      if (opts.cause) {
+        const by = opts.by || null;
+        if (opts.cause === 'break') {
+          // The id placed is air; report the block that was removed.
+          events.emit('block:break', { x: wx, y: wy, z: wz, blockId: prev, by });
+        } else if (opts.cause === 'place') {
+          events.emit('block:place', { x: wx, y: wy, z: wz, blockId: id, by });
+        }
+      }
+    }
+    return true;
+  }
+
+  _dirtyNeighbour(cx, cz) {
+    const c = this.getChunk(cx, cz);
+    if (c) { c.dirty = true; this._queueRemesh(cx, cz); }
+  }
+
+  /* ---- block queries ---------------------------------------------------- */
+
+  isSolid(wx, wy, wz) {
+    return Blocks.isSolid(this.getBlock(wx, wy, wz));
+  }
+  isLiquid(wx, wy, wz) {
+    return Blocks.isLiquid(this.getBlock(wx, wy, wz));
+  }
+
+  // Topmost solid/leaf y in a column (for spawning + ground checks). Scans down
+  // from the world ceiling and returns -1 if the whole column is air/liquid.
+  heightAt(wx, wz) {
+    // Prefer the deterministic worldgen height when no edits affect the column,
+    // but a direct scan is robust to edits and matches what is rendered.
+    for (let y = CHUNK_SY - 1; y >= 0; y--) {
+      const id = this.getBlock(wx, y, wz);
+      if (id === ID.AIR) continue;
+      if (Blocks.isLiquid(id)) continue;
+      const rt = Blocks.renderType(id);
+      if (rt === 'cross') continue;       // flowers/grass aren't standable ground
+      if (Blocks.isSolid(id) || id === ID.LEAVES || id === ID.BIRCH_LEAVES || id === ID.PINE_LEAVES) {
+        return y;
+      }
+    }
+    return -1;
+  }
+
+  // A safe standing position above the ground at (wx,wz): feet one block above
+  // the highest solid surface, with water surfaces handled gracefully.
+  getGroundSpawn(wx, wz) {
+    wx = Math.floor(wx);
+    wz = Math.floor(wz);
+    let h = this.heightAt(wx, wz);
+    if (h < 0) h = WATER_LEVEL;          // open water/void → spawn at sea level
+    // Stand on top of the surface block; ensure the two cells above are clear.
+    let y = h + 1;
+    // Nudge up out of any solids (e.g. if the surface block itself is tall).
+    for (let guard = 0; guard < 8; guard++) {
+      const feet = this.getBlock(wx, y, wz);
+      const head = this.getBlock(wx, y + 1, wz);
+      if (!Blocks.isSolid(feet) && !Blocks.isSolid(head)) break;
+      y++;
+    }
+    return { x: wx + 0.5, y, z: wz + 0.5 };
+  }
+
+  /* ---- raycasting (voxel DDA) ------------------------------------------- */
+
+  // March a ray through the voxel grid (Amanatides & Woo). Returns the first
+  // targetable block (solid OR cross-type), the face normal stepped through,
+  // the empty cell adjacent across that normal (for placement), and the id.
+  raycast(origin, dir, maxDist = 6) {
+    if (!origin || !dir) return null;
+
+    // Normalize the direction; bail on a zero-length ray.
+    let dx = dir.x, dy = dir.y, dz = dir.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-8) return null;
+    dx /= len; dy /= len; dz /= len;
+
+    // Current voxel containing the ray origin.
+    let ix = Math.floor(origin.x);
+    let iy = Math.floor(origin.y);
+    let iz = Math.floor(origin.z);
+
+    // Step direction per axis.
+    const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+    const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+    const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+
+    // Distance (in t) to cross one full voxel along each axis.
+    const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    const tDeltaY = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+    const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+
+    // Distance (in t) to the first voxel boundary on each axis.
+    const fracX = origin.x - ix;
+    const fracY = origin.y - iy;
+    const fracZ = origin.z - iz;
+    let tMaxX = dx > 0 ? (1 - fracX) * tDeltaX : dx < 0 ? fracX * tDeltaX : Infinity;
+    let tMaxY = dy > 0 ? (1 - fracY) * tDeltaY : dy < 0 ? fracY * tDeltaY : Infinity;
+    let tMaxZ = dz > 0 ? (1 - fracZ) * tDeltaZ : dz < 0 ? fracZ * tDeltaZ : Infinity;
+
+    // Track which axis we last stepped along so we know the face normal.
+    let nx = 0, ny = 0, nz = 0;
+    let t = 0;
+
+    // Cap iterations defensively in addition to the distance test.
+    const maxSteps = Math.ceil(maxDist * 3) + 8;
+    for (let i = 0; i < maxSteps; i++) {
+      const id = this.getBlock(ix, iy, iz);
+      const targetable = Blocks.isSolid(id) || Blocks.renderType(id) === 'cross';
+      if (targetable && id !== ID.AIR) {
+        return {
+          block: { x: ix, y: iy, z: iz },
+          normal: { x: nx, y: ny, z: nz },
+          place: { x: ix + nx, y: iy + ny, z: iz + nz },
+          blockId: id,
+        };
+      }
+
+      // Advance to the next voxel boundary along the nearest axis.
+      if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
+        ix += stepX; t = tMaxX; tMaxX += tDeltaX;
+        nx = -stepX; ny = 0; nz = 0;
+      } else if (tMaxY <= tMaxZ) {
+        iy += stepY; t = tMaxY; tMaxY += tDeltaY;
+        nx = 0; ny = -stepY; nz = 0;
+      } else {
+        iz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ;
+        nx = 0; ny = 0; nz = -stepZ;
+      }
+      if (t > maxDist) break;
+    }
+    return null;
+  }
+
+  /* ---- streaming + meshing --------------------------------------------- */
+
+  update(dt, anchor) {
+    // Defensive: never throw in the hot path.
+    if (!anchor) return;
+    const settings = (this.game && this.game.state && this.game.state.settings) || {};
+    const rd = clamp((settings.renderDistance | 0) || 6, 2, 12);
+
+    const acx = Math.floor(anchor.x / CHUNK_SX);
+    const acz = Math.floor(anchor.z / CHUNK_SZ);
+    this._anchorCX = acx;
+    this._anchorCZ = acz;
+
+    // 1) Ensure every chunk within render distance exists + is queued to mesh.
+    //    Track how many of the in-range ring still need a mesh, for progress.
+    let needed = 0;
+    let ready = 0;
+    for (let dz = -rd; dz <= rd; dz++) {
+      for (let dxc = -rd; dxc <= rd; dxc++) {
+        // Use a round-ish disc so corners don't load unnecessarily.
+        if (dxc * dxc + dz * dz > (rd + 0.5) * (rd + 0.5)) continue;
+        const cx = acx + dxc;
+        const cz = acz + dz;
+        const key = chunkKey(cx, cz);
+        needed++;
+        this.ensureChunk(cx, cz);
+        const meshSet = this.meshes.get(key);
+        const chunk = this.chunks.get(key);
+        if (meshSet && !(chunk && chunk.dirty)) {
+          ready++;
+        } else {
+          this._queueRemesh(cx, cz);
+        }
+      }
+    }
+
+    // 2) Unload chunks beyond render distance + 1 (free CPU + GPU memory).
+    const unloadR = rd + 1;
+    for (const key of [...this.chunks.keys()]) {
+      const ck = this._keyCoords(key);
+      const ddx = ck.cx - acx;
+      const ddz = ck.cz - acz;
+      if (ddx * ddx + ddz * ddz > (unloadR + 0.5) * (unloadR + 0.5)) {
+        this._unloadChunk(key);
+      }
+    }
+
+    // 3) Process a bounded slice of the remesh queue, nearest-first.
+    this._processRemeshQueue(acx, acz, 3);
+
+    // 4) Loading progress + world:ready, only while priming the first ring.
+    const events = this.game && this.game.events;
+    if (!this._primed) {
+      const value = needed > 0 ? clamp(ready / needed, 0, 1) : 1;
+      if (events && value !== this._lastProgress) {
+        this._lastProgress = value;
+        events.emit('loading:progress', {
+          value,
+          text: value >= 1 ? 'World ready' : `Generating terrain… ${Math.round(value * 100)}%`,
+        });
+      }
+      // Consider the world primed once the spawn ring is fully meshed AND the
+      // queue has drained (so the player doesn't drop into holes).
+      if (needed > 0 && ready >= needed && this.remeshQueue.size === 0) {
+        this._primed = true;
+        if (events && !this._readyEmitted) {
+          this._readyEmitted = true;
+          events.emit('loading:progress', { value: 1, text: 'World ready' });
+          events.emit('world:ready', {});
+        }
+      }
+    }
+  }
+
+  _queueRemesh(cx, cz) {
+    this.remeshQueue.add(chunkKey(cx, cz));
+  }
+
+  // Build geometry for up to `budget` of the nearest queued chunks this frame.
+  _processRemeshQueue(acx, acz, budget) {
+    if (this.remeshQueue.size === 0) return;
+
+    // Sort queued keys by squared distance to the anchor (nearest first).
+    const keys = [...this.remeshQueue];
+    keys.sort((a, b) => {
+      const A = this._keyCoords(a), B = this._keyCoords(b);
+      const da = (A.cx - acx) * (A.cx - acx) + (A.cz - acz) * (A.cz - acz);
+      const db = (B.cx - acx) * (B.cx - acx) + (B.cz - acz) * (B.cz - acz);
+      return da - db;
+    });
+
+    let built = 0;
+    for (let i = 0; i < keys.length && built < budget; i++) {
+      const key = keys[i];
+      this.remeshQueue.delete(key);
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;      // was unloaded between queueing and now
+      this._buildChunkMesh(chunk);
+      chunk.dirty = false;
+      built++;
+      const events = this.game && this.game.events;
+      if (events) events.emit('chunk:meshed', { cx: chunk.cx, cz: chunk.cz });
+    }
+  }
+
+  // (Re)build the three buckets of geometry for one chunk and swap the meshes,
+  // disposing any previous geometry to avoid GPU leaks.
+  _buildChunkMesh(chunk) {
+    const T = this.THREE;
+    const scene = this.game && this.game.scene;
+    const key = chunkKey(chunk.cx, chunk.cz);
+
+    // Sample neighbours through getBlock so border faces cull correctly.
+    const getBlock = (wx, wy, wz) => this.getBlock(wx, wy, wz);
+    let data;
+    try {
+      data = meshChunk(chunk, getBlock, {
+        ao: true,
+        worldOffset: { x: chunk.cx * CHUNK_SX, z: chunk.cz * CHUNK_SZ },
+      });
+    } catch (err) {
+      console.error('meshChunk failed', err);
+      return;
+    }
+    if (!data) return;
+
+    const existing = this.meshes.get(key) || { opaque: null, water: null, cross: null };
+    const next = { opaque: null, water: null, cross: null };
+
+    next.opaque = this._swapBucket(existing.opaque, data.opaque, this.matOpaque, chunk, scene, 'opaque');
+    next.water = this._swapBucket(existing.water, data.water, this.matWater, chunk, scene, 'water');
+    next.cross = this._swapBucket(existing.cross, data.cross, this.matCross, chunk, scene, 'cross');
+
+    this.meshes.set(key, next);
+  }
+
+  // Build/replace a single bucket mesh from plain mesher arrays. Returns the
+  // new mesh (or null if the bucket is empty). Disposes the old geometry.
+  _swapBucket(oldMesh, bucket, material, chunk, scene, name) {
+    const T = this.THREE;
+    const hasData = bucket && bucket.positions && bucket.positions.length > 0
+      && bucket.indices && bucket.indices.length > 0;
+
+    if (!hasData) {
+      // Nothing to draw — tear down any previous mesh for this bucket.
+      if (oldMesh) {
+        if (scene) scene.remove(oldMesh);
+        if (oldMesh.geometry) oldMesh.geometry.dispose();
+      }
+      return null;
+    }
+
+    const geom = new T.BufferGeometry();
+    geom.setAttribute('position', new T.BufferAttribute(new Float32Array(bucket.positions), 3));
+    geom.setAttribute('normal', new T.BufferAttribute(new Float32Array(bucket.normals), 3));
+    geom.setAttribute('color', new T.BufferAttribute(new Float32Array(bucket.colors), 3));
+    geom.setIndex(new T.BufferAttribute(new Uint32Array(bucket.indices), 1));
+    geom.computeBoundingSphere();
+
+    if (oldMesh) {
+      // Reuse the existing mesh object: dispose old geometry, attach new.
+      if (oldMesh.geometry) oldMesh.geometry.dispose();
+      oldMesh.geometry = geom;
+      // Ensure it's still parented (it should be) at the chunk origin.
+      oldMesh.position.set(chunk.cx * CHUNK_SX, 0, chunk.cz * CHUNK_SZ);
+      if (scene && !oldMesh.parent) scene.add(oldMesh);
+      return oldMesh;
+    }
+
+    const mesh = new T.Mesh(geom, material);
+    mesh.name = `chunk_${name}_${chunk.cx}_${chunk.cz}`;
+    mesh.position.set(chunk.cx * CHUNK_SX, 0, chunk.cz * CHUNK_SZ);
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    // Transparent/cross buckets shouldn't write huge frustum issues; defaults ok.
+    if (name === 'water') mesh.renderOrder = 1;
+    if (scene) scene.add(mesh);
+    return mesh;
+  }
+
+  // Remove a chunk's data + meshes entirely and drop queued remeshes for it.
+  _unloadChunk(key) {
+    this._disposeMeshSet(key);
+    this.meshes.delete(key);
+    this.chunks.delete(key);
+    this.remeshQueue.delete(key);
+  }
+
+  // Dispose every mesh/geometry in a chunk's bucket set and remove from scene.
+  _disposeMeshSet(key) {
+    const set = this.meshes.get(key);
+    if (!set) return;
+    const scene = this.game && this.game.scene;
+    for (const name of ['opaque', 'water', 'cross']) {
+      const mesh = set[name];
+      if (!mesh) continue;
+      if (scene) scene.remove(mesh);
+      if (mesh.geometry) mesh.geometry.dispose();
+      // Materials are shared across chunks — never dispose them here.
+    }
+  }
+
+  /* ---- persistence ------------------------------------------------------ */
+
+  serialize() {
+    const edits = [];
+    for (const [k, id] of this.edits) {
+      const c = k.indexOf(',');
+      const c2 = k.indexOf(',', c + 1);
+      const x = +k.slice(0, c);
+      const y = +k.slice(c + 1, c2);
+      const z = +k.slice(c2 + 1);
+      edits.push([x, y, z, id]);
+    }
+    return { seed: this.seed, edits };
+  }
+
+  // Re-apply saved diffs. Call before chunks are meshed; any already-loaded
+  // chunk is updated + queued for remesh, and the edit is stored so chunks
+  // generated later also receive it.
+  applyEdits(edits) {
+    if (!Array.isArray(edits)) return;
+    for (let i = 0; i < edits.length; i++) {
+      const e = edits[i];
+      if (!e) continue;
+      const x = e[0] | 0, y = e[1] | 0, z = e[2] | 0, id = e[3] | 0;
+      if (y < 0 || y >= CHUNK_SY) continue;
+      this.edits.set(voxelKey(x, y, z), id);
+
+      // If the target chunk is already loaded, write through + queue a remesh.
+      const cx = Math.floor(x / CHUNK_SX);
+      const cz = Math.floor(z / CHUNK_SZ);
+      const chunk = this.getChunk(cx, cz);
+      if (chunk) {
+        chunk.setLocal(x - cx * CHUNK_SX, y, z - cz * CHUNK_SZ, id);
+        chunk.dirty = true;
+        this._queueRemesh(cx, cz);
+      }
+    }
+  }
+
+  /* ---- helpers ---------------------------------------------------------- */
+
+  // Parse a chunkKey "cx,cz" back into integer coords (avoids parseKey alloc
+  // patterns and keeps it dependency-light).
+  _keyCoords(key) {
+    const c = key.indexOf(',');
+    return { cx: +key.slice(0, c), cz: +key.slice(c + 1) };
+  }
+}
+
+export default World;
