@@ -37,7 +37,8 @@ await section('blocks', async () => {
 await section('items', async () => {
   const { default: Items } = await import('../js/items/items.js');
   ok('cobblestone exists', !!Items.get('cobblestone'));
-  ok('wooden_pickaxe is tool', Items.isTool('wooden_pickaxe'));
+  ok('wood_pickaxe is tool', Items.isTool('wood_pickaxe'));
+  ok('diamond_sword is tool', Items.isTool('diamond_sword'));
   ok('dirt placeable', Items.isPlaceable('dirt'));
   ok('stack size default', Items.stackSize('cobblestone') === 64);
   ok('dropFor stone = cobblestone', Items.dropFor(1) === 'cobblestone');

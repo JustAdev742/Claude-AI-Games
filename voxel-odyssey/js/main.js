@@ -120,6 +120,10 @@ async function boot() {
   // expose for debugging / tests
   window.GAME = game;
 
+  // Loading-screen state (declared before the first startWorld() call below so
+  // primeWorld() can reference it without hitting a temporal-dead-zone error).
+  let loadingDone = false;
+
   // ---- menu backdrop: a slowly orbiting world behind the title screen ----
   const menuCam = { angle: 0, center: new THREE.Vector3(8, WATER_LEVEL + 6, 8), radius: 28, height: 18 };
 
@@ -216,7 +220,6 @@ async function boot() {
     primeWorld();
   }
 
-  let loadingDone = false;
   function primeWorld() {
     loadingDone = false;
     if (loadingScreen) { loadingScreen.classList.remove('hidden'); }

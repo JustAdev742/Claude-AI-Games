@@ -40,14 +40,14 @@ async function main() {
   const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: ROOT, stdio: 'ignore' });
   await sleep(800);
 
-  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
+  // The game is fully self-contained (Three.js is vendored locally), so the
+  // browser needs no network at all — do NOT route through the agent proxy.
   const launchOpts = {
     headless: true,
-    args: ['--ignore-certificate-errors', '--use-gl=swiftshader', '--enable-webgl', '--no-sandbox'],
+    args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--enable-webgl', '--no-sandbox'],
   };
   const exe = findChromium();
   if (exe) launchOpts.executablePath = exe;
-  if (proxy) launchOpts.proxy = { server: proxy, bypass: '127.0.0.1,localhost' };
 
   const errors = [];
   const warnings = [];
@@ -66,6 +66,18 @@ async function main() {
     });
     page.on('pageerror', (err) => errors.push('PAGEERROR: ' + (err && err.message ? err.message : String(err))));
 
+    // Capture window 'error' / 'unhandledrejection' (these can show the fatal
+    // overlay without surfacing as a pageerror).
+    await page.addInitScript(() => {
+      window.__winErrors = [];
+      window.addEventListener('error', (e) => {
+        window.__winErrors.push((e && e.error && e.error.stack) || (e && e.message) || 'resource/error event (no message)');
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        window.__winErrors.push('REJECTION: ' + ((e && e.reason && e.reason.stack) || (e && e.reason) || 'unknown'));
+      });
+    });
+
     await page.goto(URL, { waitUntil: 'load', timeout: 30000 });
 
     // Wait for the game context + all systems to exist.
@@ -77,8 +89,9 @@ async function main() {
     // Start a new world deterministically (skip the click→pointerlock gesture path).
     await page.evaluate(() => window.GAME.events.emit('game:new', { seed: 'smoke-test', gamemode: 'survival' }));
 
-    // Let it generate + run for a few seconds.
-    await sleep(5000);
+    // Let it generate + run. Software rendering (swiftshader) is slow, so give
+    // the world time to stream + mesh the spawn ring.
+    await sleep(10000);
 
     const probe = await page.evaluate(() => {
       const g = window.GAME;
@@ -93,6 +106,10 @@ async function main() {
         worldActive: g.worldActive,
         time: g.sky.timeOfDay,
         loadingHidden: document.getElementById('loading-screen').classList.contains('hidden'),
+        fatalShown: !document.getElementById('fatal-error').hidden,
+        fatalMsg: (document.getElementById('fatal-message') || {}).textContent || '',
+        winErrors: (window.__winErrors || []).slice(0, 6),
+        sunIntensity: g.sky && g.sky.sunLight ? g.sky.sunLight.intensity : null,
       };
     });
 
@@ -100,14 +117,23 @@ async function main() {
 
     // brief second sample to confirm the loop is advancing
     const f1 = probe.frame;
-    await sleep(700);
-    const f2 = await page.evaluate(() => window.GAME.engine.frame);
+    await sleep(2500);
+    const final = await page.evaluate(() => ({
+      frame: window.GAME.engine.frame,
+      fatalShown: !document.getElementById('fatal-error').hidden,
+      fatalMsg: (document.getElementById('fatal-message') || {}).textContent || '',
+      winErrors: (window.__winErrors || []).slice(0, 8),
+    }));
+    const f2 = final.frame;
+    probe.fatalShown = probe.fatalShown || final.fatalShown;
+    probe.fatalMsg = final.fatalMsg || probe.fatalMsg;
+    probe.winErrors = final.winErrors;
 
     const benign = (e) => /pointer ?lock|user gesture|AudioContext|was prevented|permissions policy|favicon/i.test(e);
     const realErrors = errors.filter((e) => !benign(e));
 
     result = {
-      ok: realErrors.length === 0 && probe.worldActive && f2 > f1 && probe.sceneChildren > 3,
+      ok: realErrors.length === 0 && !probe.fatalShown && (probe.winErrors || []).length === 0 && probe.worldActive && f2 > f1 && probe.sceneChildren > 3,
       probe,
       loopAdvanced: f2 > f1,
       realErrors,
