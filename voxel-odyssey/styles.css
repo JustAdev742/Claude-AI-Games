@@ -222,7 +222,12 @@ html, body {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   background: rgba(6, 9, 18, 0.6); backdrop-filter: blur(3px);
 }
-.menu-overlay.fullscreen { background: radial-gradient(1200px 700px at 50% -10%, #16203c, #070b16 75%); }
+/* Semi-transparent vignette so the slowly-orbiting backdrop world shows
+   through the title/menu while keeping the panel readable. */
+.menu-overlay.fullscreen {
+  background: radial-gradient(1100px 800px at 50% 30%, rgba(8, 12, 24, 0.34), rgba(6, 9, 18, 0.74) 92%);
+  backdrop-filter: blur(1.5px);
+}
 .menu-panel {
   background: var(--panel); border: 1px solid var(--slot-border); border-radius: 16px;
   padding: 26px 30px; width: min(560px, 92vw); box-shadow: var(--shadow);

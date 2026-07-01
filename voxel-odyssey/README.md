@@ -10,7 +10,13 @@ greedy face-culled chunk meshing with ambient occlusion, swept-AABB physics,
 day/night lighting, mobs with AI, crafting, particles, and fully synthesized
 audio (no asset files anywhere).
 
-![Voxel Odyssey](tests/screenshot.png)
+![Voxel Odyssey gameplay](docs/gameplay.png)
+
+<p align="center">
+  <img src="docs/title.png" width="49%" alt="Title screen" />
+  <img src="docs/sunset.png" width="49%" alt="Sunset over the plains" />
+  <img src="docs/inventory.png" width="49%" alt="Inventory & crafting" />
+</p>
 
 ## ▶️ Play
 
