@@ -146,6 +146,22 @@ export class Inventory {
     return remaining;
   }
 
+  // How many of `itemKey` would fit right now (without mutating). Used to guard
+  // operations that must not silently destroy items (e.g. crafting output).
+  spaceFor(itemKey, count = 1) {
+    if (!itemKey) return 0;
+    const max = this._stackSize(itemKey);
+    let room = 0;
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      const s = this.slots[i];
+      if (s == null) room += max;
+      else if (s.id === itemKey && s.count < max) room += max - s.count;
+      if (room >= count) return count;
+    }
+    return room;
+  }
+  hasSpaceFor(itemKey, count = 1) { return this.spaceFor(itemKey, count) >= count; }
+
   /* ---- removing --------------------------------------------------------- */
 
   // Remove up to `count` items from a specific slot. Returns the number

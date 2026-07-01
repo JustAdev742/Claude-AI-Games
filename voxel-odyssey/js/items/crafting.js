@@ -364,6 +364,12 @@ export class Crafting {
     const inv = this.game && this.game.inventory;
     if (!inv || typeof inv.consume !== 'function' || typeof inv.add !== 'function') return false;
     if (!this.canCraft(r, inv)) return false;
+    // Don't consume ingredients if the output has nowhere to go (would be lost).
+    if (typeof inv.hasSpaceFor === 'function' && !inv.hasSpaceFor(r.output.id, r.output.count)) {
+      const bus = this.game && this.game.events;
+      if (bus && typeof bus.emit === 'function') bus.emit('toast', { text: 'Inventory full', kind: 'warn' });
+      return false;
+    }
 
     // Determine exactly which keys/amounts to consume (respecting tags).
     const groups = this._recipeIngredients(r);

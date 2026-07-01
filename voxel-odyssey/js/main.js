@@ -120,10 +120,6 @@ async function boot() {
   // expose for debugging / tests
   window.GAME = game;
 
-  // Loading-screen state (declared before the first startWorld() call below so
-  // primeWorld() can reference it without hitting a temporal-dead-zone error).
-  let loadingDone = false;
-
   // ---- menu backdrop: a slowly orbiting world behind the title screen ----
   const menuCam = { angle: 0, center: new THREE.Vector3(8, WATER_LEVEL + 6, 8), radius: 28, height: 18 };
 
@@ -166,12 +162,11 @@ async function boot() {
   });
 
   // ---- pause / lock integration ----
-  events.on('pointerlock', ({ locked }) => {
-    if (locked) return;
-    if (state.mode !== 'play') return;
-    if (state.flags.paused || state.flags.inventoryOpen) return;
-    openPause();
-  });
+  // Pause is driven entirely by the Escape keypress in the loop below (a single
+  // deterministic effect). We deliberately do NOT open pause from the
+  // 'pointerlock' lost event: pressing Escape also exits pointer lock, and
+  // opening pause there too would let the same keypress open-then-resume in one
+  // frame (a menu flash). Clicking the canvas re-locks; tab-hide auto-pauses.
 
   canvas.addEventListener('click', () => {
     if (state.mode === 'play' && !state.flags.paused && !state.flags.inventoryOpen && !input.locked) {
@@ -180,10 +175,13 @@ async function boot() {
     }
   });
 
-  // ---- save on tab close ----
+  // ---- save on tab close / auto-pause when hidden ----
   window.addEventListener('beforeunload', () => { if (game.worldActive && state.mode === 'play') saveGame(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.worldActive && state.mode === 'play') saveGame();
+    if (document.hidden && game.worldActive && state.mode === 'play') {
+      saveGame();
+      if (!state.flags.paused && !state.flags.inventoryOpen) openPause();
+    }
   });
 
   // ---- helpers ----
@@ -221,24 +219,27 @@ async function boot() {
   }
 
   function primeWorld() {
-    loadingDone = false;
     if (loadingScreen) { loadingScreen.classList.remove('hidden'); }
-    let progress = 0;
+    // Each priming is self-contained: a per-call `done` flag + local handlers,
+    // so priming a new world before the previous world:ready fires can't leak
+    // the previous 'loading:progress' subscription.
+    let done = false;
     const onProg = (p) => {
-      progress = p.value;
-      if (loadingFill) loadingFill.style.width = Math.round(progress * 100) + '%';
+      if (loadingFill) loadingFill.style.width = Math.round((p.value || 0) * 100) + '%';
       if (loadingText && p.text) loadingText.textContent = p.text;
     };
-    events.on('loading:progress', onProg);
     const finish = () => {
-      if (loadingDone) return;
-      loadingDone = true;
+      if (done) return;
+      done = true;
       events.off('loading:progress', onProg);
+      events.off('world:ready', finish);
+      clearTimeout(timer);
       if (loadingScreen) loadingScreen.classList.add('hidden');
     };
+    events.on('loading:progress', onProg);
     events.once('world:ready', finish);
     // Fallback: never get stuck on the loading screen.
-    setTimeout(finish, 8000);
+    const timer = setTimeout(finish, 8000);
   }
 
   function enterPlay() {
@@ -335,6 +336,7 @@ async function boot() {
         if (input.actionPressed('pause')) {
           if (state.flags.paused) resumePlay();
           else if (state.flags.inventoryOpen) game.menus.toggleInventory();
+          else openPause();
         }
         if (!state.flags.paused && input.actionPressed('inventory')) {
           game.menus.toggleInventory();

@@ -192,7 +192,7 @@ export class Menus {
     if (!this.layer) return;
     this._beforeOpenMenu();
     this._clearOverlay();
-    this._closeInventoryDom();
+    this._dismissInventoryIfOpen();
     this.current = 'main';
 
     const ov = this._ensureOverlay(true);
@@ -440,7 +440,7 @@ export class Menus {
     if (!this.layer) return;
     this._beforeOpenMenu();
     this._clearOverlay();
-    this._closeInventoryDom();
+    this._dismissInventoryIfOpen();
     this.current = 'death';
 
     const ov = this._ensureOverlay(false);
@@ -631,7 +631,7 @@ export class Menus {
     document.addEventListener('mousemove', this._onMouseMove);
   }
 
-  _closeInventory() {
+  _closeInventory(relock = true) {
     const g = this.game;
 
     // Return any in-progress crafting materials and a held cursor stack to the
@@ -651,11 +651,19 @@ export class Menus {
     if (g && g.events) g.events.off('inventory:change', this._onInvChange);
     document.removeEventListener('mousemove', this._onMouseMove);
 
-    // In play mode, grab the mouse again so the player can look around.
+    // In play mode, grab the mouse again so the player can look around — unless
+    // the caller is transitioning to the death/title screen (relock === false).
     const mode = g && g.state ? g.state.flags.mode : null;
-    if (mode === 'play' && g && g.input && typeof g.input.requestLock === 'function') {
+    if (relock && mode === 'play' && g && g.input && typeof g.input.requestLock === 'function') {
       g.input.requestLock();
     }
+  }
+
+  // Close the inventory fully if it is open (returning held/crafting items and
+  // detaching listeners) without grabbing the pointer — for death/title paths.
+  _dismissInventoryIfOpen() {
+    if (this.invOpen) this._closeInventory(false);
+    else this._closeInventoryDom();
   }
 
   // Remove the inventory overlay DOM without touching flags/locks (used when

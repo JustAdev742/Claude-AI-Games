@@ -203,10 +203,16 @@ export class World {
 
     // If the edit sits on a chunk border, the neighbour's border faces may
     // change too — dirty + remesh it as well.
-    if (lx === 0) this._dirtyNeighbour(cx - 1, cz);
-    if (lx === CHUNK_SX - 1) this._dirtyNeighbour(cx + 1, cz);
-    if (lz === 0) this._dirtyNeighbour(cx, cz - 1);
-    if (lz === CHUNK_SZ - 1) this._dirtyNeighbour(cx, cz + 1);
+    const onWestX = lx === 0, onEastX = lx === CHUNK_SX - 1;
+    const onNorthZ = lz === 0, onSouthZ = lz === CHUNK_SZ - 1;
+    if (onWestX) this._dirtyNeighbour(cx - 1, cz);
+    if (onEastX) this._dirtyNeighbour(cx + 1, cz);
+    if (onNorthZ) this._dirtyNeighbour(cx, cz - 1);
+    if (onSouthZ) this._dirtyNeighbour(cx, cz + 1);
+    // A corner edit also changes the diagonal neighbour's ambient occlusion.
+    if ((onWestX || onEastX) && (onNorthZ || onSouthZ)) {
+      this._dirtyNeighbour(cx + (onWestX ? -1 : 1), cz + (onNorthZ ? -1 : 1));
+    }
 
     // Notify the rest of the game.
     const events = this.game && this.game.events;

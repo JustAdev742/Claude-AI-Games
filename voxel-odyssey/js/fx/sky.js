@@ -459,10 +459,13 @@ export class Sky {
     }
   }
 
-  // Orient a celestial disc so its face points back toward the rig origin
-  // (which sits at the camera), keeping it readable as a flat disc.
+  // Orient a celestial disc so its face points back toward the rig origin,
+  // which sits at the camera (the group follows the camera each frame). Using
+  // the group's world position — not (0,0,0) — keeps the discs facing the
+  // viewer everywhere, not just near the world origin.
   _faceOrigin(mesh) {
-    mesh.lookAt(0, 0, 0);
+    if (this.group) mesh.lookAt(this.group.position);
+    else mesh.lookAt(0, 0, 0);
   }
 
   _updateLights(p, t) {

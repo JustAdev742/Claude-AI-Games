@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import { Mob, MOB_TYPES } from './mob.js';
 import Items from '../items/items.js';
 import Blocks from '../world/blocks.js';
+import { WATER_LEVEL } from '../world/constants.js';
 import { dist2D, RNG } from '../core/utils.js';
 
 /* ---- tuning constants ---------------------------------------------------- */
@@ -352,7 +353,9 @@ export class EntityManager {
     let ny = it.y + it.vy * dt;
 
     if (world && typeof world.heightAt === 'function') {
-      let groundY = -Infinity;
+      // Fall back to the water surface if the column has no solid ground
+      // (over ocean / a void column) so items never sink to -Infinity.
+      let groundY = WATER_LEVEL;
       try {
         const h = world.heightAt(Math.floor(it.x), Math.floor(it.z));
         if (h >= 0) groundY = h + 1; // rest on top of the surface block

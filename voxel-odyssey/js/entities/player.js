@@ -421,8 +421,9 @@ export class Player {
     // --- Y axis ---
     this.position.y += dy;
     if (this._collidesAABB(world, half, height)) {
-      this.position.y -= dy;
-      // Resolve precisely against the offending surface.
+      // Resolve from the tentative (penetrating) position — same as X/Z below.
+      // Reverting first would feed _resolveAxis the pre-move Y and snap the
+      // player a whole block past the surface (launching on landing).
       this.position.y = this._resolveAxis(world, half, height, 'y', dy);
       if (dy < 0) { this.onGround = true; }
       this.velocity.y = 0;
@@ -1146,7 +1147,16 @@ export class Player {
 
   load(obj) {
     if (!obj) return;
-    if (obj.position) this.position.set(obj.position.x || 0, obj.position.y || 64, obj.position.z || 0);
+    if (obj.position) {
+      const p = obj.position;
+      // Use finite checks (not `||`) so a legitimately-saved coordinate of 0
+      // isn't discarded and teleport the player to the fallback height.
+      this.position.set(
+        Number.isFinite(p.x) ? p.x : 0,
+        Number.isFinite(p.y) ? p.y : 64,
+        Number.isFinite(p.z) ? p.z : 0
+      );
+    }
     if (obj.velocity) this.velocity.set(obj.velocity.x || 0, obj.velocity.y || 0, obj.velocity.z || 0);
     if (typeof obj.yaw === 'number') this.yaw = obj.yaw;
     if (typeof obj.pitch === 'number') this.pitch = clamp(obj.pitch, -PITCH_LIMIT, PITCH_LIMIT);

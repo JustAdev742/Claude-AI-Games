@@ -182,7 +182,9 @@ export class WorldGen {
   // terrain transitions between biomes without hard seams, then layers in the
   // shared rolling + ridge fields.
   _computeHeight(wx, wz, biome, continent, temperature, moisture) {
-    const b = BIOMES[biome] || BIOMES.plains;
+    // Blend the height parameters with those of nearby columns so terrain
+    // transitions smoothly across biome borders instead of forming a hard step.
+    const b = this._blendedParams(wx, wz, biome);
 
     // Rolling hills: medium-frequency fbm, ~[-1,1].
     const roll = this.hillNoise.fbm2(wx, wz, 4, 0.012, 2.0, 0.5);
@@ -199,7 +201,7 @@ export class WorldGen {
     h += roll * b.amp;
     h += detail * b.amp * 0.35 * b.rough;
     if (b.ridged > 0) {
-      // Square the ridge to sharpen peaks, scale by biome's ridge weight.
+      // Square the ridge to sharpen peaks, scale by blended ridge weight.
       h += ridge * ridge * RIDGE_HEIGHT * b.ridged;
     }
 
@@ -207,6 +209,31 @@ export class WorldGen {
     if (biome === 'ocean') h = Math.min(h, SEA - 1);
 
     return clamp(Math.round(h), 1, MAX_Y - 6);
+  }
+
+  // Average the height parameters (base/amp/ridged/rough) of the biome here and
+  // at four nearby sample points, so the values change gradually across a biome
+  // border rather than snapping. Deterministic (pure climate noise).
+  _blendedParams(wx, wz, primaryBiome) {
+    const R = 6;
+    const offs = [[0, 0], [R, 0], [-R, 0], [0, R], [0, -R]];
+    let base = 0, amp = 0, ridged = 0, rough = 0;
+    for (let i = 0; i < offs.length; i++) {
+      const ox = offs[i][0], oz = offs[i][1];
+      let bio;
+      if (ox === 0 && oz === 0) {
+        bio = primaryBiome;
+      } else {
+        const t = this._temperature(wx + ox, wz + oz);
+        const m = this._moisture(wx + ox, wz + oz);
+        const c = this._continent(wx + ox, wz + oz);
+        bio = this._classify(t, m, c);
+      }
+      const bb = BIOMES[bio] || BIOMES.plains;
+      base += bb.base; amp += bb.amp; ridged += bb.ridged; rough += bb.rough;
+    }
+    const n = offs.length;
+    return { base: base / n, amp: amp / n, ridged: ridged / n, rough: rough / n };
   }
 
   /* --- chunk fill ------------------------------------------------------- */

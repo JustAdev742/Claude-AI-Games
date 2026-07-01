@@ -148,8 +148,31 @@ async function main() {
     const endPos = await page.evaluate(() => ({ x: GAME.player.position.x, z: GAME.player.position.z }));
     const moved = Math.hypot(endPos.x - startPos.x, endPos.z - startPos.z);
 
+    // ---- fall & land: verify the player rests ON the surface (collision fix) ----
+    await page.evaluate(() => {
+      const g = window.GAME;
+      g.player.setGamemode('survival'); g.player.flying = false;
+      const px = Math.round(g.player.position.x), pz = Math.round(g.player.position.z);
+      const h = g.world.heightAt(px, pz);
+      g.player.position.set(px + 0.5, h + 6, pz + 0.5);
+      g.player.velocity.set(0, 0, 0);
+    });
+    await sleep(2200);
+    const landing = await page.evaluate(() => {
+      const g = window.GAME;
+      const px = Math.round(g.player.position.x), pz = Math.round(g.player.position.z);
+      const h = g.world.heightAt(px, pz);
+      return {
+        onGround: g.player.onGround,
+        feetY: +g.player.position.y.toFixed(2),
+        surfaceTop: h + 1,
+        restsOnSurface: Math.abs(g.player.position.y - (h + 1)) < 0.6,
+        launched: g.player.position.y > h + 4,
+      };
+    });
+
     // let mobs/particles/entities update for a few seconds to catch update() errors
-    await sleep(4000);
+    await sleep(3000);
 
     const finalState = await page.evaluate(() => ({
       winErrors: (window.__we || []).slice(0, 10),
@@ -162,9 +185,11 @@ async function main() {
 
     const opFails = ops.filter((o) => !o.ok);
     report = {
-      ok: opFails.length === 0 && errors.length === 0 && finalState.winErrors.length === 0 && moved > 0.3,
+      ok: opFails.length === 0 && errors.length === 0 && finalState.winErrors.length === 0 && moved > 0.3
+        && landing.onGround && landing.restsOnSurface && !landing.launched,
       moved: +moved.toFixed(2),
       inputState,
+      landing,
       opFailures: opFails,
       opCount: ops.length,
       ops,
