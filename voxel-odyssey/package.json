@@ -7,7 +7,7 @@
   "scripts": {
     "start": "python3 -m http.server 8080",
     "serve": "npx --yes serve -l 8080 .",
-    "test": "node tests/run.js",
+    "test": "node tests/run.js && node tests/lighting.test.mjs && node tests/resourcepack.test.mjs",
     "test:browser": "node tests/smoke.mjs && node tests/interact.mjs",
     "build": "node tools/build-single-file.mjs",
     "build:fragment": "node tools/build-single-file.mjs --fragment"

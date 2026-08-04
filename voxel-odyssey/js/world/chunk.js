@@ -234,6 +234,10 @@ function buildAOOffsets() {
 const TINT_AMOUNT = 0.045;
 const TINT_SEED = 1337;
 
+// Neutral albedo, used as the vertex colour for textured faces so the shader
+// multiplies the texture by shading alone.
+const WHITE = [1, 1, 1];
+
 export function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false; // default on
@@ -331,19 +335,22 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
 
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
-    // Base face color × per-face shade. The shade is a cheap directional cue
-    // (tops bright, undersides dark) that survives even in flat light; the
-    // real illumination comes from the baked light attribute.
-    const base = Blocks.faceColor(id, f);
     const shade = FACE_SHADE[f];
-    const tinted = tintVariation(base, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+
+    // The shader computes base = texture * vColor. When a texture supplies the
+    // albedo, vColor must carry ONLY shading and tint — passing the block's
+    // base colour as well would square the albedo, which comes out dark and
+    // oversaturated. Untextured blocks still need the colour, since it is the
+    // only thing describing what they look like.
+    const source = tile ? WHITE : Blocks.faceColor(id, f);
+    const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
     const r = tinted[0] * shade;
     const g = tinted[1] * shade;
     const b = tinted[2] * shade;
 
     const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
 
     pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, tile);
   }
@@ -366,14 +373,14 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     if (Blocks.isLiquid(neighbor)) continue;
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
-    const base = Blocks.faceColor(id, f);
     const shade = FACE_SHADE[f];
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+    const base = tile ? WHITE : Blocks.faceColor(id, f);
     const r = base[0] * shade;
     const g = base[1] * shade;
     const b = base[2] * shade;
 
     const lit = lightForFace(ctx, f, wx, wy_, wz);
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
 
     // The top face (and the upper edge of side faces) uses the lowered height
     // only when the surface is exposed.
@@ -383,7 +390,10 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
 
 /* -------- emit a cross-quad plant/torch -------- */
 function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
-  const color = Blocks.faceColor(id, 2); // top color is the representative tint
+  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
+  // As in emitCube: with a texture the vertex colour is neutral so the albedo
+  // isn't applied twice.
+  const color = tile ? WHITE : Blocks.faceColor(id, 2);
 
   // A cross-quad occupies the same cell it is lit by, so sample light at the
   // block itself rather than at a neighbour. An emissive cross (a torch) would
@@ -403,7 +413,6 @@ function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const r = color[0], g = color[1], b = color[2];
   // Normals point up so plants catch top-down lighting pleasantly.
   const n = [0, 1, 0];
-  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
 
   // Quad A: from (x0,z0) to (x1,z1) — a diagonal plane.
   addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, tile);

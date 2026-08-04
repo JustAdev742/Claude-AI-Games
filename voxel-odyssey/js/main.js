@@ -33,6 +33,7 @@ import { Inventory } from './items/inventory.js';
 import { Crafting } from './items/crafting.js';
 import { Particles } from './fx/particles.js';
 import { AudioSystem } from './fx/audio.js';
+import { Resources } from './render/resources.js';
 import { Sky } from './fx/sky.js';
 import { HUD } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
@@ -84,7 +85,7 @@ async function boot() {
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
     inventory: null, crafting: null, particles: null, audio: null,
-    sky: null, hud: null, menus: null,
+    sky: null, hud: null, menus: null, resources: null,
     // runtime
     dt: 0, elapsed: 0, seed: 0, worldActive: false,
     toast(text, kind) { events.emit('toast', { text, kind }); },
@@ -103,10 +104,13 @@ async function boot() {
   game.player = new Player(game);
   game.hud = new HUD(game);
   game.menus = new Menus(game);
+  game.resources = new Resources(game);
 
   // ---- init in dependency order ----
+  // `resources` comes after `world` because building the atlas hands it
+  // straight to World.setAtlas, which needs World's materials to exist.
   const initOrder = [
-    'worldgen', 'world', 'inventory', 'crafting', 'particles',
+    'worldgen', 'world', 'resources', 'inventory', 'crafting', 'particles',
     'audio', 'sky', 'entities', 'player', 'hud', 'menus',
   ];
   for (const name of initOrder) {
@@ -119,6 +123,12 @@ async function boot() {
 
   // expose for debugging / tests
   window.GAME = game;
+
+  // ---- resource packs: drop a .zip anywhere on the window ----------------
+  // Deliberately a drop target rather than a file picker: packs arrive from
+  // Modrinth/CurseForge as downloaded .zip files, and dragging one in is the
+  // shortest path from "downloaded" to "playing with it".
+  setupResourcePackDrop(game);
 
   // ---- menu backdrop: a slowly orbiting world behind the title screen ----
   const menuCam = { angle: 0, center: new THREE.Vector3(8, WATER_LEVEL + 6, 8), radius: 28, height: 18 };
@@ -347,12 +357,80 @@ async function boot() {
       }
 
       game.audio.update(dt);
+      // Animated block textures (water, fire) — advances layer indices only.
+      if (game.resources) game.resources.update(dt);
       game.hud.update(dt);
       game.menus.update(dt);
     } catch (err) {
       if (!boot._errored) { console.error('Loop error:', err); boot._errored = true; }
     } finally {
       input.lateUpdate();
+    }
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   Resource-pack drag & drop.
+
+   Accepts a standard Minecraft resource pack .zip dropped anywhere on the
+   window. Packs from Modrinth and CurseForge are exactly this format, so a
+   downloaded file works without unpacking or conversion.
+   --------------------------------------------------------------------------- */
+function setupResourcePackDrop(game) {
+  if (typeof window === 'undefined') return;
+
+  let overlay = null;
+  const showHint = (text, kind) => {
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'pack-drop-hint';
+      document.body.appendChild(overlay);
+    }
+    overlay.textContent = text;
+    overlay.dataset.kind = kind || 'info';
+    overlay.hidden = false;
+  };
+  const hideHint = () => { if (overlay) overlay.hidden = true; };
+
+  // dragover must be cancelled or the browser navigates to the dropped file.
+  window.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    showHint('Drop a resource pack (.zip) to apply it');
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    // Only hide when the cursor actually leaves the window, not when it
+    // crosses between child elements.
+    if (e.relatedTarget === null) hideHint();
+  });
+
+  window.addEventListener('drop', async (e) => {
+    if (!e.dataTransfer || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+
+    const file = e.dataTransfer.files[0];
+    if (!/\.zip$/i.test(file.name)) {
+      showHint(`"${file.name}" is not a .zip resource pack`, 'error');
+      setTimeout(hideHint, 3000);
+      return;
+    }
+
+    showHint(`Loading ${file.name}…`);
+    try {
+      const buffer = await file.arrayBuffer();
+      const info = await game.resources.applyPack(buffer, file.name.replace(/\.zip$/i, ''));
+      const msg = info.missing.length
+        ? `${info.name}: ${info.found} textures (${info.missing.length} not in pack, using built-ins)`
+        : `${info.name}: all ${info.found} textures loaded`;
+      showHint(msg, 'ok');
+      game.toast(msg, 'good');
+      setTimeout(hideHint, 4000);
+    } catch (err) {
+      console.error('resource pack failed', err);
+      showHint(`Could not load pack: ${err.message}`, 'error');
+      game.toast(`Resource pack failed: ${err.message}`, 'bad');
+      setTimeout(hideHint, 5000);
     }
   });
 }

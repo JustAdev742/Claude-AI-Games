@@ -89,6 +89,13 @@ const VERT = /* glsl */`
 const FRAG = /* glsl */`
   precision highp float;
 
+  // Under GLSL3 Three aliases attribute/varying/texture2D for us but
+  // deliberately does NOT alias gl_FragColor — an ES3 shader is expected to
+  // declare its own output. We declare it and restore the alias, because the
+  // stock <fog_fragment> chunk included below still writes to gl_FragColor.
+  layout(location = 0) out highp vec4 pc_fragColor;
+  #define gl_FragColor pc_fragColor
+
   varying vec3 vColor;
   varying vec2 vLight;
   varying float vAO;
@@ -96,7 +103,10 @@ const FRAG = /* glsl */`
   varying float vTexIdx;
   varying vec3 vWorldPos;
 
-  uniform sampler2D uAtlas;
+  // A texture ARRAY, not an atlas image: each block texture owns a layer, so
+  // mip filtering can never blend one block's texels into another's. vTexIdx
+  // selects the layer. See render/atlas.js.
+  uniform sampler2DArray uAtlas;
   uniform float uHasAtlas;
   uniform vec3 uSkyTint;      // colour sunlight contributes (warm at dusk)
   uniform vec3 uBlockTint;    // colour torches contribute (fixed warm orange)
@@ -113,7 +123,7 @@ const FRAG = /* glsl */`
     vec4 base = vec4(vColor, 1.0);
 
     if (uHasAtlas > 0.5 && vTexIdx >= 0.0) {
-      vec4 tex = texture2D(uAtlas, vUv);
+      vec4 tex = texture(uAtlas, vec3(vUv, vTexIdx));
       if (tex.a < uAlphaTest) discard;
       // Tint the texture by the vertex colour. Grey-ish textures come through
       // as-is; grass/foliage carry a biome tint in vColor.
@@ -144,9 +154,19 @@ const FRAG = /* glsl */`
 /* Shared uniform block. Every terrain material references the SAME uniform
    objects, so updating the day/night state once updates opaque, water and
    foliage passes together — no chance of them drifting out of sync. */
+/* A 1x1x1 transparent array texture. GLSL requires every sampler to be bound
+   to something of the right type; leaving uAtlas null before a pack loads
+   would have the renderer substitute a plain 2D default, which mismatches
+   sampler2DArray and fails to link on some drivers. */
+function makeFallbackArrayTexture() {
+  const tex = new THREE.DataArrayTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, 1);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export function createSharedUniforms() {
   return {
-    uAtlas: { value: null },
+    uAtlas: { value: makeFallbackArrayTexture() },
     uHasAtlas: { value: 0 },
     uSkyTint: { value: new THREE.Color(1, 1, 1) },
     uBlockTint: { value: new THREE.Color(1.0, 0.78, 0.52) },
@@ -183,6 +203,10 @@ export function createVoxelMaterials(shared) {
       vertexShader: VERT,
       fragmentShader: FRAG,
       fog: true,
+      // GLSL3 is required for sampler2DArray. Three's ES3 prefix aliases
+      // attribute/varying/gl_FragColor/texture2D, so the shader source above
+      // still reads like conventional GLSL1.
+      glslVersion: THREE.GLSL3,
     }, extra));
     return m;
   };

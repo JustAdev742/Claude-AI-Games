@@ -388,3 +388,29 @@ hr.sep { border: none; border-top: 1px solid #ffffff12; margin: 16px 0; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- resource-pack drop hint ------------------------------------------- */
+/* Shown while a file is dragged over the window, and briefly after a pack
+   loads or fails. Sits above everything, ignores pointer events so it can
+   never eat the drop itself. */
+#pack-drop-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  z-index: 100;
+  pointer-events: none;
+  max-width: min(90vw, 640px);
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: 2px dashed rgba(255, 255, 255, 0.35);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+#pack-drop-hint[hidden] { display: none; }
+#pack-drop-hint[data-kind='ok'] { border-color: var(--accent); border-style: solid; }
+#pack-drop-hint[data-kind='error'] { border-color: var(--danger); border-style: solid; }
