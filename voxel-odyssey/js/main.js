@@ -34,6 +34,8 @@ import { Crafting } from './items/crafting.js';
 import { Particles } from './fx/particles.js';
 import { AudioSystem } from './fx/audio.js';
 import { Resources } from './render/resources.js';
+import { NetClient } from './net/client.js';
+import { RemotePlayers } from './net/remotePlayers.js';
 import { Sky } from './fx/sky.js';
 import { HUD } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
@@ -86,6 +88,7 @@ async function boot() {
     worldgen: null, world: null, player: null, entities: null,
     inventory: null, crafting: null, particles: null, audio: null,
     sky: null, hud: null, menus: null, resources: null,
+    net: null, remotePlayers: null,
     // runtime
     dt: 0, elapsed: 0, seed: 0, worldActive: false,
     toast(text, kind) { events.emit('toast', { text, kind }); },
@@ -105,6 +108,10 @@ async function boot() {
   game.hud = new HUD(game);
   game.menus = new Menus(game);
   game.resources = new Resources(game);
+  // Networking is inert until connect() is called — single-player runs the
+  // identical code path with no socket attached.
+  game.net = new NetClient(game);
+  game.remotePlayers = new RemotePlayers(game, game.net);
 
   // ---- init in dependency order ----
   // `resources` comes after `world` because building the atlas hands it
@@ -152,6 +159,40 @@ async function boot() {
     if (!save) { game.toast('No saved world found', 'warn'); return; }
     startWorld(save.seed, save, false);
     enterPlay();
+  });
+
+  // ---- multiplayer ------------------------------------------------------
+  // The server owns the seed, so we must connect BEFORE generating anything:
+  // starting a world first and then joining would build terrain from the
+  // wrong seed and every block would disagree with the other players.
+  events.on('game:join', async ({ url, name, resolve, reject }) => {
+    try {
+      await game.net.connect(url, name);
+      const seed = typeof game.net.serverSeed === 'string'
+        ? hashString(game.net.serverSeed)
+        : (game.net.serverSeed | 0);
+      state.set('gamemode', 'survival');
+      startWorld(seed, null, false);
+      enterPlay();
+      game.toast(`Connected to ${url}`, 'good');
+      if (resolve) resolve();
+    } catch (err) {
+      console.error('join failed', err);
+      if (reject) reject(err);
+      else game.toast(err.message || 'Could not connect', 'bad');
+    }
+  });
+
+  events.on('net:disconnected', ({ reason }) => {
+    game.toast(`Disconnected: ${reason || 'connection lost'}`, 'bad');
+  });
+  events.on('net:kicked', ({ reason }) => {
+    game.toast(`Kicked: ${reason || 'no reason given'}`, 'bad');
+  });
+  events.on('net:join', ({ name }) => game.toast(`${name} joined`, 'good'));
+  events.on('net:leave', ({ id }) => {
+    const p = game.net.players.get(id);
+    game.toast(`${(p && p.name) || 'A player'} left`, 'warn');
   });
 
   events.on('game:save', () => { saveGame(); game.toast('Game saved', 'good'); });
@@ -355,6 +396,13 @@ async function boot() {
           state.flags.debug = !state.flags.debug;
         }
       }
+
+      // Networking runs even while paused: staying connected and continuing
+      // to receive other players' edits matters more than saving a few
+      // packets, and a client that stops sending state looks frozen to
+      // everyone else.
+      if (game.net) game.net.update(dt);
+      if (game.remotePlayers) game.remotePlayers.update(dt);
 
       game.audio.update(dt);
       // Animated block textures (water, fire) — advances layer indices only.

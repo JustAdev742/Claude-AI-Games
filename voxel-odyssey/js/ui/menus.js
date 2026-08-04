@@ -188,6 +188,85 @@ export class Menus {
      Main menu (title screen)
      ===================================================================== */
 
+  /* Multiplayer join screen. Defaults to the origin the page was served from,
+     because the game server also serves the game — so someone who opened a
+     friend's link can just press Join without knowing what a WebSocket URL is. */
+  showMultiplayer() {
+    if (!this.layer) return;
+    this._beforeOpenMenu();
+    this._clearOverlay();
+    this._dismissInventoryIfOpen();
+    this.current = 'multiplayer';
+
+    const ov = this._ensureOverlay(true);
+    const panel = this._make('div', { class: 'menu-panel center-stack' });
+    panel.appendChild(this._make('h2', { text: 'Join Multiplayer' }));
+    panel.appendChild(this._make('p', {
+      class: 'subtitle',
+      text: 'Connect to a Voxel Odyssey server. Run one with: node server/index.js',
+    }));
+
+    const store = (this.game && this.game.state && this.game.state.settings) || {};
+    const defaultUrl = (() => {
+      if (store.serverUrl) return store.serverUrl;
+      if (typeof location !== 'undefined' && /^https?:/.test(location.protocol)) {
+        return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+      }
+      return 'ws://localhost:8090';
+    })();
+
+    panel.appendChild(this._make('div', { class: 'section-title', text: 'SERVER' }));
+    const urlInput = this._make('input', {
+      class: 'select', type: 'text', value: defaultUrl,
+      style: 'width:100%; margin-bottom:8px;',
+    });
+    panel.appendChild(urlInput);
+
+    panel.appendChild(this._make('div', { class: 'section-title', text: 'NAME' }));
+    const nameInput = this._make('input', {
+      class: 'select', type: 'text', placeholder: 'Player',
+      value: store.playerName || '',
+      style: 'width:100%; margin-bottom:8px;',
+    });
+    panel.appendChild(nameInput);
+
+    const statusLine = this._make('p', { class: 'subtitle', text: '' });
+    panel.appendChild(statusLine);
+
+    const joinBtn = this._button('Join Server', {
+      onClick: async () => {
+        const url = urlInput.value.trim();
+        const name = nameInput.value.trim() || 'Player';
+        if (!url) { statusLine.textContent = 'Enter a server address.'; return; }
+        joinBtn.disabled = true;
+        statusLine.textContent = `Connecting to ${url}…`;
+        try {
+          if (this.game.state && this.game.state.set) {
+            this.game.state.set('serverUrl', url);
+            this.game.state.set('playerName', name);
+          }
+          await this._emitJoin(url, name);
+        } catch (err) {
+          statusLine.textContent = err.message || 'Could not connect.';
+          joinBtn.disabled = false;
+        }
+      },
+    });
+    panel.appendChild(joinBtn);
+    panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._button('Back', { onClick: () => this.showMainMenu() }));
+
+    ov.appendChild(panel);
+  }
+
+  // Kept separate so the connect promise can be awaited by the caller and any
+  // failure surfaces in the dialog rather than only in the console.
+  _emitJoin(url, name) {
+    return new Promise((resolve, reject) => {
+      this._emit('game:join', { url, name, resolve, reject });
+    });
+  }
+
   showMainMenu() {
     if (!this.layer) return;
     this._beforeOpenMenu();
@@ -240,6 +319,12 @@ export class Menus {
         onClick: () => this._emit('game:continue', {}),
       }));
     }
+
+    // --- Multiplayer ------------------------------------------------------
+    panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._button('Join Multiplayer', {
+      onClick: () => this.showMultiplayer(),
+    }));
 
     // --- Secondary actions ----------------------------------------------
     panel.appendChild(this._make('hr', { class: 'sep' }));

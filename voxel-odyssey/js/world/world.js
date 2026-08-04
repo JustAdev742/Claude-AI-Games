@@ -240,6 +240,17 @@ export class World {
     const prev = chunk.getLocal(lx, wy, lz);
     if (prev === id) return false; // no-op; nothing changed
 
+    // In multiplayer the server is authoritative over the world. We still
+    // apply the change immediately (waiting a round trip makes mining feel
+    // broken) but register it as a prediction the server can reject. Edits
+    // that arrived FROM the network are marked cause:'network' and must not
+    // be echoed back, or two clients ping-pong the same block forever.
+    const net = this.game && this.game.net;
+    if (net && net.connected && opts.cause !== 'network') {
+      const cause = id === ID.AIR ? 1 /* CAUSE.BREAK */ : 0 /* CAUSE.PLACE */;
+      net.sendBlockEdit(wx, wy, wz, id, prev, cause);
+    }
+
     // Write the voxel and record the diff so it survives save/regeneration.
     chunk.setLocal(lx, wy, lz, id);
     this.edits.set(voxelKey(wx, wy, wz), id);
