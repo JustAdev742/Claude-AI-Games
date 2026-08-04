@@ -62,6 +62,23 @@ export class Input {
 
     this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
 
+    // Gamepad state, refreshed each frame from the Gamepad API. Sticks are
+    // reported as axis positions, not deltas, so look is applied as a RATE
+    // (radians/sec) rather than accumulated into mouseDX — holding a stick
+    // half-deflected should turn steadily, not accelerate.
+    this.gamepad = {
+      connected: false,
+      moveX: 0, moveZ: 0,
+      lookX: 0, lookZ: 0,
+      buttons: new Set(),
+      _prevButtons: new Set(),
+      index: -1,
+    };
+
+    // Smoothed look deltas (see settings.lookSmoothing).
+    this._smoothDX = 0;
+    this._smoothDY = 0;
+
     this._bind();
   }
 
@@ -195,6 +212,29 @@ export class Input {
   }
   setBinding(name, codes) { this.bindings[name] = codes; }
 
+  /* Overlay the player's saved rebinds onto the defaults. Only overridden
+     actions are stored, so a build that adds a new action still gets its
+     default binding instead of an undefined one. */
+  applyBindings(custom) {
+    this.bindings = JSON.parse(JSON.stringify(DEFAULT_BINDINGS));
+    if (!custom) return;
+    for (const [action, codes] of Object.entries(custom)) {
+      if (Array.isArray(codes) && codes.length) this.bindings[action] = codes.slice();
+    }
+  }
+
+  defaultBindings() { return JSON.parse(JSON.stringify(DEFAULT_BINDINGS)); }
+
+  /* Which action, if any, already uses this key — so the rebind UI can warn
+     about a conflict instead of silently creating one. */
+  actionUsing(code, exceptAction) {
+    for (const [action, codes] of Object.entries(this.bindings)) {
+      if (action === exceptAction) continue;
+      if (codes.includes(code)) return action;
+    }
+    return null;
+  }
+
   mouseDown(button) { return this.buttons.has(button); }
   mousePressed(button) { return this._buttonPressed.has(button); }
   mouseReleased(button) { return this._buttonReleased.has(button); }
@@ -210,9 +250,78 @@ export class Input {
     if (this.action('forward')) z -= 1;
     // include touch joystick
     x += this.touch.mx; z += this.touch.my;
+    // ...and the gamepad's left stick. Added rather than replacing, so a
+    // player can use stick and keys together without either winning.
+    x += this.gamepad.moveX; z += this.gamepad.moveZ;
     const len = Math.hypot(x, z);
     if (len > 1) { x /= len; z /= len; }
     return { x, z };
+  }
+
+  /* ---- gamepad ---------------------------------------------------------
+     Polled, not event-driven: the Gamepad API only exposes state snapshots,
+     and browsers deliberately don't fire events for stick motion. */
+  pollGamepad(settings) {
+    const gp = this.gamepad;
+    gp.moveX = 0; gp.moveZ = 0; gp.lookX = 0; gp.lookZ = 0;
+
+    if (!settings || settings.gamepadEnabled === false) { gp.connected = false; return; }
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) { gp.connected = false; return; }
+
+    const pads = navigator.getGamepads();
+    let pad = null;
+    for (const p of pads) { if (p && p.connected) { pad = p; break; } }
+    if (!pad) {
+      gp.connected = false;
+      gp._prevButtons = gp.buttons;
+      gp.buttons = new Set();
+      return;
+    }
+
+    gp.connected = true;
+    gp.index = pad.index;
+
+    // Radial deadzone, not per-axis: clamping each axis independently makes
+    // diagonal input snap to the axes near the centre.
+    const dz = settings.gamepadDeadzone != null ? settings.gamepadDeadzone : 0.18;
+    const applyDeadzone = (x, y) => {
+      const mag = Math.hypot(x, y);
+      if (mag < dz) return [0, 0];
+      // Rescale so movement starts at zero just outside the deadzone rather
+      // than jumping straight to `dz` worth of speed.
+      const scaled = (mag - dz) / (1 - dz);
+      return [(x / mag) * scaled, (y / mag) * scaled];
+    };
+
+    const [lx, ly] = applyDeadzone(pad.axes[0] || 0, pad.axes[1] || 0);
+    gp.moveX = lx; gp.moveZ = ly;
+
+    const [rx, ry] = applyDeadzone(pad.axes[2] || 0, pad.axes[3] || 0);
+    // Squared response curve: fine aim near centre, fast turns at full tilt.
+    gp.lookX = rx * Math.abs(rx);
+    gp.lookZ = ry * Math.abs(ry);
+
+    gp._prevButtons = gp.buttons;
+    gp.buttons = new Set();
+    for (let i = 0; i < pad.buttons.length; i++) {
+      if (pad.buttons[i] && pad.buttons[i].pressed) gp.buttons.add(i);
+    }
+  }
+
+  // Standard-layout button indices, named so callers read clearly.
+  padDown(button) { return this.gamepad.buttons.has(button); }
+  padPressed(button) { return this.gamepad.buttons.has(button) && !this.gamepad._prevButtons.has(button); }
+
+  /* Smoothed look delta for this frame. Smoothing is an exponential blend
+     toward the raw delta; at 0 it returns the raw value unchanged so the
+     default path is exactly 1:1 with the mouse. */
+  lookDelta(smoothing) {
+    const raw = { dx: this.mouseDX || 0, dy: this.mouseDY || 0 };
+    const s = Math.max(0, Math.min(0.95, smoothing || 0));
+    if (s <= 0) { this._smoothDX = raw.dx; this._smoothDY = raw.dy; return raw; }
+    this._smoothDX = this._smoothDX * s + raw.dx * (1 - s);
+    this._smoothDY = this._smoothDY * s + raw.dy * (1 - s);
+    return { dx: this._smoothDX, dy: this._smoothDY };
   }
 
   /* ---- per-frame cleanup ---- */

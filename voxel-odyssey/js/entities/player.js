@@ -245,17 +245,29 @@ export class Player {
 
     let dx = 0, dy = 0;
     if (input.locked) {
-      dx = input.mouseDX || 0;
-      dy = input.mouseDY || 0;
+      const d = input.lookDelta(settings.lookSmoothing);
+      dx = d.dx;
+      dy = d.dy;
     } else if (input.touch && input.touch.active) {
       // Touch look deltas (already in pixel-ish units).
       dx = input.touch.mx || 0;
       dy = input.touch.my || 0;
     }
 
-    this.yaw -= dx * sens;
     const invert = settings.invertY ? -1 : 1;
+    this.yaw -= dx * sens;
     this.pitch += dy * sens * invert;
+
+    // Gamepad look is a RATE, not a delta: a stick reports how far it is
+    // pushed, so it must be scaled by frame time or turning speed would
+    // depend on frame rate.
+    if (input.gamepad && input.gamepad.connected) {
+      const speed = settings.gamepadLookSpeed != null ? settings.gamepadLookSpeed : 2.6;
+      const dt = this.game.dt || 0.016;
+      this.yaw -= input.gamepad.lookX * speed * dt;
+      this.pitch += input.gamepad.lookZ * speed * dt * invert;
+    }
+
     this.pitch = clamp(this.pitch, -PITCH_LIMIT, PITCH_LIMIT);
 
     // Keep yaw in a sane range to avoid float drift over long sessions.

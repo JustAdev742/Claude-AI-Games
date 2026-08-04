@@ -23,6 +23,24 @@ export const DEFAULT_SETTINGS = {
   smoothLighting: true,
   daylightSpeed: 1.0,     // multiplier on the day/night cycle
   gamemode: 'survival',   // 'survival' | 'creative'
+
+  // ---- look feel ----
+  // Camera smoothing blends raw mouse deltas over a few frames. Kept off by
+  // default: it adds input latency, which players used to raw mouse input
+  // notice immediately, but it visibly helps low-DPI mice and gamepads.
+  lookSmoothing: 0.0,     // 0 = raw (1:1), 1 = heavily smoothed
+  gamepadEnabled: true,
+  gamepadLookSpeed: 2.6,  // radians/sec at full stick deflection
+  gamepadDeadzone: 0.18,
+
+  // ---- multiplayer ----
+  serverUrl: '',
+  playerName: '',
+
+  // Custom key bindings, action -> array of KeyboardEvent.code. Empty means
+  // "use the defaults"; only actions the player actually rebinds are stored,
+  // so adding a new action later doesn't need a settings migration.
+  keyBindings: {},
 };
 
 function safeLocalStorage() {

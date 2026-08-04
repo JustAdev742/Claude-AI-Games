@@ -128,6 +128,12 @@ async function boot() {
     }
   }
 
+  // Apply any saved key rebinds over the defaults.
+  input.applyBindings(state.settings.keyBindings);
+  events.on('settings:change', ({ key }) => {
+    if (key === 'keyBindings' || key === '*') input.applyBindings(state.settings.keyBindings);
+  });
+
   // expose for debugging / tests
   window.GAME = game;
 
@@ -396,6 +402,9 @@ async function boot() {
           state.flags.debug = !state.flags.debug;
         }
       }
+
+      // Gamepads are polled, not evented — the API only exposes snapshots.
+      input.pollGamepad(state.settings);
 
       // Networking runs even while paused: staying connected and continuing
       // to receive other players' edits matters more than saving a few

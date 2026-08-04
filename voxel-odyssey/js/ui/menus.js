@@ -421,6 +421,11 @@ export class Menus {
 
     // ---- Footer --------------------------------------------------------
     panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._button('Customise Controls…', {
+      onClick: () => this.showKeybinds(back),
+    }));
+
     const footer = this._make('div', { class: 'row' });
     footer.appendChild(this._button('Reset to Defaults', {
       small: true, row: true,
@@ -567,6 +572,105 @@ export class Menus {
   /* =====================================================================
      Controls / How to Play
      ===================================================================== */
+
+  /* Key rebinding screen. Clicking an action arms a one-shot capture of the
+     next keypress; a key already used elsewhere is reported rather than
+     silently double-bound, since a duplicate binding is very hard to diagnose
+     from inside the game. */
+  showKeybinds(back = 'pause') {
+    if (!this.layer) return;
+    this._beforeOpenMenu();
+    this._clearOverlay();
+    this.current = 'keybinds';
+
+    const input = this.game.input;
+    const state = this.game.state;
+    const ov = this._ensureOverlay(back === 'main');
+    const panel = this._make('div', { class: 'menu-panel' });
+    panel.appendChild(this._make('h2', { text: 'Controls' }));
+
+    const hint = this._make('p', { class: 'subtitle', text: 'Click a binding, then press a key. Esc cancels.' });
+    panel.appendChild(hint);
+
+    const ACTIONS = [
+      ['forward', 'Move forward'], ['back', 'Move back'],
+      ['left', 'Strafe left'], ['right', 'Strafe right'],
+      ['jump', 'Jump'], ['sneak', 'Sneak'], ['sprint', 'Sprint'],
+      ['inventory', 'Inventory'], ['drop', 'Drop item'],
+      ['fly', 'Toggle flight'], ['debug', 'Debug overlay'],
+    ];
+
+    const list = this._make('div', { class: 'keybind-list' });
+    let capturing = null;   // { action, button }
+
+    const label = (codes) => (codes || []).map(prettyKeyName).join(' / ') || '—';
+
+    const rebuild = () => {
+      list.innerHTML = '';
+      for (const [action, title] of ACTIONS) {
+        const row = this._make('div', { class: 'keybind-row' });
+        row.appendChild(this._make('span', { class: 'keybind-name', text: title }));
+        const btn = this._make('button', {
+          class: 'keybind-key',
+          text: capturing && capturing.action === action ? 'Press a key…' : label(input.bindings[action]),
+        });
+        btn.addEventListener('click', () => {
+          capturing = { action };
+          rebuild();
+        });
+        row.appendChild(btn);
+        list.appendChild(row);
+      }
+    };
+
+    const onKey = (e) => {
+      if (!capturing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const action = capturing.action;
+      capturing = null;
+
+      if (e.code === 'Escape') { rebuild(); return; }
+
+      const clash = input.actionUsing(e.code, action);
+      if (clash) {
+        hint.textContent = `${prettyKeyName(e.code)} is already used by "${clash}". Pick another key.`;
+        rebuild();
+        return;
+      }
+
+      const next = Object.assign({}, state.settings.keyBindings || {});
+      next[action] = [e.code];
+      state.set('keyBindings', next);
+      input.applyBindings(next);
+      hint.textContent = `Bound ${prettyKeyName(e.code)} to "${action}".`;
+      rebuild();
+    };
+    // Capture phase, so a rebind never leaks through to gameplay input.
+    window.addEventListener('keydown', onKey, true);
+    this._keybindCleanup = () => window.removeEventListener('keydown', onKey, true);
+
+    rebuild();
+    panel.appendChild(list);
+
+    panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._button('Reset to Defaults', {
+      onClick: () => {
+        state.set('keyBindings', {});
+        input.applyBindings({});
+        hint.textContent = 'Controls reset to defaults.';
+        rebuild();
+      },
+    }));
+    panel.appendChild(this._button('Back', {
+      onClick: () => {
+        if (this._keybindCleanup) { this._keybindCleanup(); this._keybindCleanup = null; }
+        this.showSettings(back);
+      },
+    }));
+
+    ov.appendChild(panel);
+  }
 
   showControls(back = 'main') {
     if (!this.layer) return;
@@ -1246,3 +1350,23 @@ export class Menus {
 }
 
 export default Menus;
+
+/* KeyboardEvent.code is a physical-key identifier ("KeyW", "ShiftLeft"), not
+   something to show a player. Map the common shapes to readable labels. */
+export function prettyKeyName(code) {
+  if (!code) return '—';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return `Num ${code.slice(6)}`;
+  if (code.startsWith('Arrow')) return `${code.slice(5)} Arrow`;
+  const NAMES = {
+    Space: 'Space', ShiftLeft: 'Left Shift', ShiftRight: 'Right Shift',
+    ControlLeft: 'Left Ctrl', ControlRight: 'Right Ctrl',
+    AltLeft: 'Left Alt', AltRight: 'Right Alt',
+    Escape: 'Esc', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace',
+    CapsLock: 'Caps Lock', Backquote: '`', Minus: '-', Equal: '=',
+    BracketLeft: '[', BracketRight: ']', Backslash: '\\', Semicolon: ';',
+    Quote: "'", Comma: ',', Period: '.', Slash: '/',
+  };
+  return NAMES[code] || code;
+}
