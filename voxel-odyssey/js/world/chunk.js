@@ -27,13 +27,17 @@ export class Chunk {
     this.cx = cx | 0;
     this.cz = cz | 0;
 
-    // Block ids and an (optional) skylight cache. Uint8 is enough: < 256 ids.
+    // Block ids. Uint8 is enough: < 256 ids.
     this.blocks = new Uint8Array(CHUNK_VOL);
+
+    // Per-voxel light, two 4-bit channels packed into one byte (see
+    // lighting.js): bits 7..4 skylight, bits 3..0 blocklight. Both 0..15.
     this.light = new Uint8Array(CHUNK_VOL);
 
     // Bookkeeping flags read by World.
     this.dirty = true;       // geometry needs (re)building
     this.generated = false;  // terrain has been written by WorldGen
+    this.lit = false;        // LightEngine has done its initial flood fill
     this.empty = true;       // fast skip: true while only air has been written
   }
 
@@ -70,15 +74,35 @@ export class Chunk {
     this.dirty = true;
   }
 
-  // Get skylight (0..15) at a local coordinate; 0 if out of range.
-  getLight(lx, y, lz) {
+  // Raw packed light byte (sky << 4 | block); 0 if out of range.
+  getLightByte(lx, y, lz) {
     if (!Chunk.inBounds(lx, y, lz)) return 0;
     return this.light[localIndex(lx, y, lz)];
   }
 
-  setLight(lx, y, lz, value) {
+  // Skylight 0..15 — daylight reaching this voxel, scaled by time of day
+  // at render time.
+  getSkyLight(lx, y, lz) {
+    if (!Chunk.inBounds(lx, y, lz)) return 0;
+    return (this.light[localIndex(lx, y, lz)] >> 4) & 0x0f;
+  }
+
+  setSkyLight(lx, y, lz, value) {
     if (!Chunk.inBounds(lx, y, lz)) return;
-    this.light[localIndex(lx, y, lz)] = value & 0x0f;
+    const i = localIndex(lx, y, lz);
+    this.light[i] = (this.light[i] & 0x0f) | ((value & 0x0f) << 4);
+  }
+
+  // Blocklight 0..15 — torches and other emitters, independent of time of day.
+  getBlockLight(lx, y, lz) {
+    if (!Chunk.inBounds(lx, y, lz)) return 0;
+    return this.light[localIndex(lx, y, lz)] & 0x0f;
+  }
+
+  setBlockLight(lx, y, lz, value) {
+    if (!Chunk.inBounds(lx, y, lz)) return;
+    const i = localIndex(lx, y, lz);
+    this.light[i] = (this.light[i] & 0xf0) | (value & 0x0f);
   }
 
   // Inclusive vertical fill of one column with a single id. Clamps to range.
@@ -111,6 +135,7 @@ export class Chunk {
     this.light.fill(0);
     this.empty = true;
     this.generated = false;
+    this.lit = false;
     this.dirty = true;
   }
 }
@@ -124,8 +149,21 @@ export class Chunk {
      - water  : liquids (transparent pass, lowered top surface)
      - cross  : flowers / grass / mushrooms / torch (two crossed quads)
 
-   Each bucket is { positions:[], normals:[], colors:[], indices:[] } in
-   chunk-LOCAL space. World offsets the whole mesh to the chunk origin.
+   Each bucket is a set of parallel arrays in chunk-LOCAL space; World offsets
+   the whole mesh to the chunk origin and uploads them as vertex attributes:
+
+     positions  vec3   geometry
+     normals    vec3   geometry
+     colors     vec3   base/biome tint  -> aColor
+     light      vec2   (skylight, blocklight) each 0..1, smoothed per corner
+     ao         float  ambient occlusion 0..1  -> aAO
+     uv         vec2   atlas coordinates
+     texIdx     float  atlas tile index, -1 when untextured
+     indices    uint
+
+   Light is emitted per-vertex but NOT combined with the time of day here —
+   that happens in the shader (see render/material.js), so sunset doesn't
+   require re-meshing the world.
    ========================================================================= */
 
 // Ambient-occlusion vertex factor from three potential occluders around a
@@ -199,6 +237,8 @@ const TINT_SEED = 1337;
 export function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false; // default on
+  const smooth = opts.smoothLighting !== false; // default on
+  const atlas = opts.atlas || null;             // optional TextureAtlas
   const off = opts.worldOffset || { x: chunk ? chunk.cx * CHUNK_SX : 0, z: chunk ? chunk.cz * CHUNK_SZ : 0 };
   const ox = off.x | 0;
   const oz = off.z | 0;
@@ -211,6 +251,7 @@ export function meshChunk(chunk, getBlock, opts) {
   if (!chunk || !chunk.blocks) return { opaque, water, cross };
 
   const blocks = chunk.blocks;
+  const lightArr = chunk.light;
 
   // A world-voxel sampler that prefers the in-chunk array (fast path) and
   // falls back to the provided getBlock for anything outside this chunk.
@@ -227,6 +268,26 @@ export function meshChunk(chunk, getBlock, opts) {
     return ID.AIR;
   };
 
+  // Packed light byte at a world voxel. Above the build limit the sky is
+  // fully open, which keeps faces on the top layer from going black.
+  const getLightFn = opts.getLight;
+  const sampleLight = (wx, wy, wz) => {
+    if (wy >= CHUNK_SY) return 0xf0;   // sky 15, block 0
+    if (wy < 0) return 0;
+    const lx = wx - ox;
+    const lz = wz - oz;
+    if (lx >= 0 && lx < CHUNK_SX && lz >= 0 && lz < CHUNK_SZ) {
+      return lightArr[localIndex(lx, wy, lz)];
+    }
+    if (typeof getLightFn === 'function') {
+      const v = getLightFn(wx, wy, wz);
+      return v === undefined || v === null ? 0 : v;
+    }
+    return 0;
+  };
+
+  const ctx = { sample, sampleLight, ao, smooth, atlas };
+
   for (let lx = 0; lx < CHUNK_SX; lx++) {
     const wx = ox + lx;
     for (let lz = 0; lz < CHUNK_SZ; lz++) {
@@ -238,11 +299,11 @@ export function meshChunk(chunk, getBlock, opts) {
 
         const render = Blocks.renderType(id);
         if (render === 'cross') {
-          emitCross(cross, id, lx, y, lz);
+          emitCross(cross, ctx, id, wx, y, wz, lx, y, lz);
         } else if (render === 'liquid') {
-          emitLiquid(water, sample, id, wx, y, wz, lx, y, lz, ao);
+          emitLiquid(water, ctx, id, wx, y, wz, lx, y, lz);
         } else {
-          emitCube(opaque, sample, id, wx, y, wz, lx, y, lz, ao);
+          emitCube(opaque, ctx, id, wx, y, wz, lx, y, lz);
         }
       }
     }
@@ -252,21 +313,27 @@ export function meshChunk(chunk, getBlock, opts) {
 }
 
 function newBucket() {
-  return { positions: [], normals: [], colors: [], indices: [] };
+  return {
+    positions: [], normals: [], colors: [],
+    light: [], ao: [], uv: [], texIdx: [],
+    indices: [],
+  };
 }
 
 /* -------- emit one opaque/leaf cube's visible faces -------- */
-function emitCube(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
+function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   for (let f = 0; f < 6; f++) {
     const dir = FACES[f].dir;
     const nx = wx + dir[0];
     const ny = wy_ + dir[1];
     const nz = wz + dir[2];
-    const neighbor = sample(nx, ny, nz);
+    const neighbor = ctx.sample(nx, ny, nz);
 
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
-    // Base face color × per-face shade, then optional AO + tint per vertex.
+    // Base face color × per-face shade. The shade is a cheap directional cue
+    // (tops bright, undersides dark) that survives even in flat light; the
+    // real illumination comes from the baked light attribute.
     const base = Blocks.faceColor(id, f);
     const shade = FACE_SHADE[f];
     const tinted = tintVariation(base, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
@@ -274,13 +341,17 @@ function emitCube(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
     const g = tinted[1] * shade;
     const b = tinted[2] * shade;
 
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, ao ? aoForFace(sample, f, wx, wy_, wz) : null);
+    const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
+    const lit = lightForFace(ctx, f, wx, wy_, wz);
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, tile);
   }
 }
 
 /* -------- emit a liquid cell (water) -------- */
-function emitLiquid(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
-  const aboveIsWater = Blocks.isLiquid(sample(wx, wy_ + 1, wz));
+function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
+  const aboveIsWater = Blocks.isLiquid(ctx.sample(wx, wy_ + 1, wz));
   // Surface is lowered when there's no water directly above (gives a top).
   const topY = aboveIsWater ? 1.0 : 0.88;
 
@@ -289,7 +360,7 @@ function emitLiquid(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
     const nx = wx + dir[0];
     const ny = wy_ + dir[1];
     const nz = wz + dir[2];
-    const neighbor = sample(nx, ny, nz);
+    const neighbor = ctx.sample(nx, ny, nz);
 
     // Cull water↔water shared faces, and faces hidden by opaque neighbours.
     if (Blocks.isLiquid(neighbor)) continue;
@@ -301,18 +372,30 @@ function emitLiquid(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
     const g = base[1] * shade;
     const b = base[2] * shade;
 
+    const lit = lightForFace(ctx, f, wx, wy_, wz);
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+
     // The top face (and the upper edge of side faces) uses the lowered height
-    // only when the surface is exposed. We pass the per-vertex top height into
-    // pushFace via the surfaceY param (applied to corners whose local y == 1).
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 1.0 - topY, null);
+    // only when the surface is exposed.
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 1.0 - topY, null, lit, tile);
   }
 }
 
 /* -------- emit a cross-quad plant/torch -------- */
-function emitCross(bucket, id, lx, ly, lz) {
+function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const color = Blocks.faceColor(id, 2); // top color is the representative tint
-  // Slight inset so the X doesn't z-fight with adjacent solid faces.
-  const inset = 0.0;
+
+  // A cross-quad occupies the same cell it is lit by, so sample light at the
+  // block itself rather than at a neighbour. An emissive cross (a torch) would
+  // otherwise read its own dark neighbour and render unlit.
+  const packed = ctx.sampleLight(wx, wy_, wz);
+  const sky = ((packed >> 4) & 0x0f) / 15;
+  const blk = (packed & 0x0f) / 15;
+  const lit = [sky, blk, sky, blk, sky, blk, sky, blk];
+
+  // Inset slightly so the X never lies exactly in the plane of an adjacent
+  // block face — coplanar surfaces are the classic z-fighting trigger.
+  const inset = 0.02;
   const x0 = lx + inset, x1 = lx + 1 - inset;
   const z0 = lz + inset, z1 = lz + 1 - inset;
   const y0 = ly, y1 = ly + 1;
@@ -320,19 +403,12 @@ function emitCross(bucket, id, lx, ly, lz) {
   const r = color[0], g = color[1], b = color[2];
   // Normals point up so plants catch top-down lighting pleasantly.
   const n = [0, 1, 0];
+  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
 
   // Quad A: from (x0,z0) to (x1,z1) — a diagonal plane.
-  addQuad(
-    bucket,
-    [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1],
-    n, r, g, b
-  );
+  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, tile);
   // Quad B: from (x0,z1) to (x1,z0) — the crossing diagonal plane.
-  addQuad(
-    bucket,
-    [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0],
-    n, r, g, b
-  );
+  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, tile);
 }
 
 /* -------- AO computation for a cube face -------- */
@@ -358,16 +434,85 @@ function aoForFace(sample, f, wx, wy_, wz) {
   return out;
 }
 
+/* -------- smooth per-corner lighting for a cube face --------
+   Averages the light of the four voxels touching each corner in the layer in
+   front of the face — the same neighbourhood AO uses. This is what turns the
+   voxel light grid into a smooth gradient across a wall instead of a visible
+   grid of flat-shaded squares.
+
+   Only non-opaque samples contribute: solid blocks store no light, so
+   including them would drag every corner adjacent to a wall towards black and
+   produce dark rims around every opening. */
+const _litScratch = new Array(8);
+function lightForFace(ctx, f, wx, wy_, wz) {
+  const dir = FACES[f].dir;
+  const bx = wx + dir[0];
+  const by = wy_ + dir[1];
+  const bz = wz + dir[2];
+
+  const basePacked = ctx.sampleLight(bx, by, bz);
+
+  if (!ctx.smooth) {
+    const s = ((basePacked >> 4) & 0x0f) / 15;
+    const b = (basePacked & 0x0f) / 15;
+    for (let i = 0; i < 8; i += 2) { _litScratch[i] = s; _litScratch[i + 1] = b; }
+    return _litScratch.slice();
+  }
+
+  const offs = AO_OFFSETS[f];
+  const out = new Array(8);
+
+  for (let c = 0; c < 4; c++) {
+    const o = offs[c];
+    let skySum = 0, blkSum = 0, n = 0;
+
+    // The four voxels meeting at this corner: the face neighbour plus the two
+    // in-plane sides and the diagonal.
+    const cand = [
+      [bx, by, bz],
+      [bx + o.side1[0], by + o.side1[1], bz + o.side1[2]],
+      [bx + o.side2[0], by + o.side2[1], bz + o.side2[2]],
+      [bx + o.diag[0], by + o.diag[1], bz + o.diag[2]],
+    ];
+    for (let i = 0; i < 4; i++) {
+      const p = cand[i];
+      if (isOccluder(ctx.sample(p[0], p[1], p[2]))) continue;
+      const packed = ctx.sampleLight(p[0], p[1], p[2]);
+      skySum += (packed >> 4) & 0x0f;
+      blkSum += packed & 0x0f;
+      n++;
+    }
+
+    if (n === 0) {
+      // Fully enclosed corner — fall back to the face neighbour's own value.
+      out[c * 2] = ((basePacked >> 4) & 0x0f) / 15;
+      out[c * 2 + 1] = (basePacked & 0x0f) / 15;
+    } else {
+      out[c * 2] = skySum / n / 15;
+      out[c * 2 + 1] = blkSum / n / 15;
+    }
+  }
+  return out;
+}
+
 /* -------- low-level geometry writers -------- */
 
 // Push a single cube face. `dropTop` (0..1) lowers any corner whose unit-cube
-// y is 1 — used to give water a sunken surface. `aoArr` (or null) multiplies
-// each corner color.
-function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr) {
+// y is 1 — used to give water a sunken surface. `aoArr` (or null) supplies the
+// per-corner AO factor, `lit` the per-corner (sky, block) pairs, and `tile`
+// the atlas rect (or null when untextured).
+function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
   const face = FACES[f];
   const dir = face.dir;
   const corners = face.corners;
   const startVert = bucket.positions.length / 3;
+
+  // Quad corner order is (top-left, bottom-left, bottom-right, top-right),
+  // so UVs walk the tile rect in the same order.
+  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
+  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
+  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
+  const ti = tile ? tile.index : -1;
 
   for (let c = 0; c < 4; c++) {
     const cor = corners[c];
@@ -378,36 +523,60 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr) {
 
     bucket.positions.push(px, py, pz);
     bucket.normals.push(dir[0], dir[1], dir[2]);
-
-    const a = aoArr ? aoArr[c] : 1.0;
-    bucket.colors.push(r * a, g * a, b * a);
+    bucket.colors.push(r, g, b);
+    bucket.ao.push(aoArr ? aoArr[c] : 1.0);
+    bucket.light.push(lit ? lit[c * 2] : 1.0, lit ? lit[c * 2 + 1] : 0.0);
+    bucket.uv.push(uvs[c * 2], uvs[c * 2 + 1]);
+    bucket.texIdx.push(ti);
   }
 
   // Two triangles per quad: 0,1,2, 0,2,3 — wound so the face is visible from
   // outside with FrontSide (FACES corners are CCW seen from outside).
-  pushQuadIndices(bucket, startVert, aoArr);
+  pushQuadIndices(bucket, startVert, aoArr, lit);
 }
 
 // Generic quad writer (used by cross planes) with explicit positions/normal.
-function addQuad(bucket, p0, p1, p2, p3, n, r, g, b) {
+function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, tile) {
   const startVert = bucket.positions.length / 3;
   bucket.positions.push(p0[0], p0[1], p0[2]);
   bucket.positions.push(p1[0], p1[1], p1[2]);
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
-  for (let i = 0; i < 4; i++) bucket.normals.push(n[0], n[1], n[2]);
-  for (let i = 0; i < 4; i++) bucket.colors.push(r, g, b);
-  pushQuadIndices(bucket, startVert, null);
+
+  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
+  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
+  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
+  const ti = tile ? tile.index : -1;
+
+  for (let i = 0; i < 4; i++) {
+    bucket.normals.push(n[0], n[1], n[2]);
+    bucket.colors.push(r, g, b);
+    bucket.ao.push(1.0);
+    bucket.light.push(lit ? lit[i * 2] : 1.0, lit ? lit[i * 2 + 1] : 0.0);
+    bucket.uv.push(uvs[i * 2], uvs[i * 2 + 1]);
+    bucket.texIdx.push(ti);
+  }
+  pushQuadIndices(bucket, startVert, null, null);
 }
 
-// Emit the two triangles for a quad starting at vertex `s`. When AO varies
-// across the quad we flip the triangulation diagonal to avoid the classic
-// anisotropic AO seam (so the darker corners share an edge).
-function pushQuadIndices(bucket, s, aoArr) {
+// Emit the two triangles for a quad starting at vertex `s`. When brightness
+// varies across the quad we flip the triangulation diagonal to avoid the
+// classic anisotropic seam (so the darker corners share an edge).
+//
+// The flip decision weighs AO *and* baked light together: with smooth
+// lighting a quad straddling a torch's edge has a strong light gradient even
+// where AO is uniform, and splitting it along the wrong diagonal leaves a
+// visible crease down the middle of the face.
+function pushQuadIndices(bucket, s, aoArr, lit) {
   let flip = false;
-  if (aoArr) {
-    // Standard rule: flip when ao[0] + ao[2] < ao[1] + ao[3].
-    if (aoArr[0] + aoArr[2] < aoArr[1] + aoArr[3]) flip = true;
+  if (aoArr || lit) {
+    const w = (i) => {
+      const a = aoArr ? aoArr[i] : 1;
+      // Combine the two light channels into one brightness proxy.
+      const l = lit ? Math.max(lit[i * 2], lit[i * 2 + 1]) : 1;
+      return a * (0.35 + 0.65 * l);
+    };
+    if (w(0) + w(2) < w(1) + w(3)) flip = true;
   }
   if (flip) {
     bucket.indices.push(s + 1, s + 2, s + 3, s + 1, s + 3, s + 0);

@@ -97,6 +97,11 @@ export class Sky {
     // Current sampled light level (0..1), exposed via getLightLevel().
     this._lightLevel = 1;
 
+    // Terrain lighting state consumed by the voxel shader each frame.
+    this._terrainTint = [1, 1, 1];
+    this._terrainDaylight = 1;
+    this._elapsed = 0;             // seconds, drives foliage wind sway
+
     this._initialized = false;
   }
 
@@ -337,6 +342,10 @@ export class Sky {
     if (!this._initialized) return;
     if (!(dt > 0)) dt = 0;
 
+    // Wall-clock accumulator, independent of the day cycle: drives the
+    // foliage wind sway in the terrain shader.
+    this._elapsed += dt;
+
     // Advance the day clock and wrap into [0,1).
     const prev = this.timeOfDay;
     this.timeOfDay += dt / DAY_LENGTH;
@@ -469,6 +478,18 @@ export class Sky {
   }
 
   _updateLights(p, t) {
+    // Cache the colour terrain should be lit by. The voxel shader multiplies
+    // baked skylight by this, so it carries the whole warm-dusk / cold-night
+    // mood without any per-chunk work. Sunlight fades toward a dim blue at
+    // night rather than to black, so moonlit ground still reads as ground.
+    const day = clamp01(p.light);
+    const moonlit = [0.30, 0.38, 0.62];
+    this._terrainTint[0] = lerp(moonlit[0], p.sun[0], day);
+    this._terrainTint[1] = lerp(moonlit[1], p.sun[1], day);
+    this._terrainTint[2] = lerp(moonlit[2], p.sun[2], day);
+    // Keep a floor under daylight so night is dim, not pitch black outdoors.
+    this._terrainDaylight = 0.16 + 0.84 * day;
+
     if (this.hemi) {
       setColor(this.hemi.color, p.hemiSky);
       setColor(this.hemi.groundColor, p.hemiGround);
@@ -566,6 +587,18 @@ export class Sky {
   getPhase() { return this._phaseFor(this.timeOfDay); }
 
   getLightLevel() { return clamp01(this._lightLevel); }
+
+  /* The state the voxel terrain shader needs each frame: how strong daylight
+     currently is, and what colour it is. Terrain lighting is baked per-vertex
+     (see world/lighting.js) and combined with these at draw time, so a sunset
+     recolours the entire world without re-meshing a single chunk. */
+  getTerrainLight() {
+    return {
+      daylight: this._terrainDaylight,
+      skyTint: this._terrainTint,
+      time: this._elapsed || 0,
+    };
+  }
 
   // Returns a unit Vector3 pointing from the world toward the sun (for shaders
   // or gameplay that wants the sun direction). Safe before init.

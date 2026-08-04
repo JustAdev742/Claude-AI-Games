@@ -29,6 +29,8 @@ import {
 } from './constants.js';
 import Blocks, { ID } from './blocks.js';
 import { chunkKey, voxelKey, clamp } from '../core/utils.js';
+import { LightEngine } from './lighting.js';
+import { createSharedUniforms, createVoxelMaterials, updateVoxelUniforms } from '../render/material.js';
 
 export class World {
   constructor(game) {
@@ -53,10 +55,19 @@ export class World {
     // for dedupe and sort by distance to the anchor each frame.
     this.remeshQueue = new Set();
 
-    // Shared materials, created in init().
+    // Shared materials + the uniform block that drives them, created in init().
     this.matOpaque = null;
     this.matWater = null;
     this.matCross = null;
+    this.uniforms = null;
+
+    // Voxel light propagation. Owns skylight + blocklight for every resident
+    // chunk and tells us which chunks need re-meshing after it settles.
+    this.lighting = new LightEngine(this);
+
+    // Optional texture atlas; null until a resource pack (or the built-in
+    // procedural set) is loaded. The mesher and shader both handle null.
+    this.atlas = null;
 
     // Streaming bookkeeping.
     this._anchorCX = 0;
@@ -71,23 +82,31 @@ export class World {
   /* ---- lifecycle -------------------------------------------------------- */
 
   init() {
-    const T = this.THREE;
-    // Three shared MeshLambertMaterials. Lighting is provided by Sky
-    // (hemisphere + sun directional); these only carry vertex colors + AO.
-    this.matOpaque = new T.MeshLambertMaterial({ vertexColors: true });
-    this.matWater = new T.MeshLambertMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false,
-    });
-    this.matCross = new T.MeshLambertMaterial({
-      vertexColors: true,
-      side: T.DoubleSide,
-      alphaTest: 0.1,
-      transparent: false,
-    });
+    // Custom voxel shader instead of MeshLambertMaterial. A directional light
+    // can't be occluded by voxels (it lit the insides of caves), so terrain is
+    // lit from the baked per-vertex light the LightEngine produces. See
+    // render/material.js for why day/night stays a uniform, not a remesh.
+    this.uniforms = createSharedUniforms();
+    const mats = createVoxelMaterials(this.uniforms);
+    this.matOpaque = mats.opaque;
+    this.matWater = mats.water;
+    this.matCross = mats.foliage;
     return this;
+  }
+
+  /* Bind a texture atlas (procedural default or a loaded resource pack) and
+     re-mesh everything so faces pick up their UVs. */
+  setAtlas(atlas) {
+    this.atlas = atlas || null;
+    if (this.uniforms) {
+      this.uniforms.uAtlas.value = atlas ? atlas.texture : null;
+      this.uniforms.uHasAtlas.value = atlas ? 1 : 0;
+    }
+    // Every chunk's UVs are now stale.
+    for (const [key, chunk] of this.chunks) {
+      chunk.dirty = true;
+      this.remeshQueue.add(key);
+    }
   }
 
   reset(seed) {
@@ -97,6 +116,9 @@ export class World {
     this.chunks.clear();
     this.edits.clear();
     this.remeshQueue.clear();
+    // Drop any in-flight light propagation — it references chunks that no
+    // longer exist, and stale queue entries would dirty the new world's chunks.
+    this.lighting.reset();
 
     this.seed = seed | 0;
     this._primed = false;
@@ -141,6 +163,13 @@ export class World {
     // Overlay any saved/player edits that fall inside this chunk's columns.
     this._applyEditsInChunk(chunk);
 
+    // Flood-fill skylight + blocklight for the new voxels, then re-seed from
+    // the four neighbours so light flows across the seam in both directions.
+    // Without the second step a chunk loaded next to an existing lit one gets
+    // a hard dark line down the shared border.
+    this.lighting.lightChunk(chunk);
+    this.lighting.seedFromNeighbours(chunk);
+
     chunk.dirty = true;
     return chunk;
   }
@@ -180,6 +209,24 @@ export class World {
     return chunk.getLocal(lx, wy, lz);
   }
 
+  /* Packed light byte (sky << 4 | block) at a world voxel. Unlike getBlock
+     this does NOT generate missing chunks: meshing calls it for every border
+     face, and generating a neighbour mid-mesh would recurse. An absent
+     neighbour reads as dark, and the chunk is re-meshed once it loads. */
+  getLightByte(wx, wy, wz) {
+    if (wy >= CHUNK_SY) return 0xf0;   // open sky above the build limit
+    if (wy < 0) return 0;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const chunk = this.chunks.get(chunkKey(cx, cz));
+    if (!chunk) return 0;
+    return chunk.getLightByte(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ);
+  }
+
+  // Convenience readers used by entities/UI (e.g. mob spawn checks).
+  getSkyLight(wx, wy, wz) { return (this.getLightByte(wx, wy, wz) >> 4) & 0x0f; }
+  getBlockLightAt(wx, wy, wz) { return this.getLightByte(wx, wy, wz) & 0x0f; }
+
   setBlock(wx, wy, wz, id, opts = {}) {
     wx |= 0; wy |= 0; wz |= 0; id |= 0;
     if (wy < 0 || wy >= CHUNK_SY) return false;
@@ -196,6 +243,12 @@ export class World {
     // Write the voxel and record the diff so it survives save/regeneration.
     chunk.setLocal(lx, wy, lz, id);
     this.edits.set(voxelKey(wx, wy, wz), id);
+
+    // Propagate the lighting consequences. Breaking a roof lets daylight down
+    // the column; placing one casts a shadow; adding/removing a torch floods
+    // or clears its radius. The engine queues the work and reports every chunk
+    // it touched, which we fold into the remesh queue in update().
+    this.lighting.onBlockChanged(wx, wy, wz, prev, id);
 
     // Mark this chunk dirty + queue a remesh.
     chunk.dirty = true;
@@ -366,6 +419,13 @@ export class World {
     this._anchorCX = acx;
     this._anchorCZ = acz;
 
+    // Push the current sun state into the shared terrain uniforms. One float
+    // and one colour re-light every chunk in the world; no geometry touched.
+    const sky = this.game && this.game.sky;
+    if (sky && this.uniforms && typeof sky.getTerrainLight === 'function') {
+      updateVoxelUniforms(this.uniforms, sky.getTerrainLight());
+    }
+
     // 1) Ensure every chunk within render distance exists + is queued to mesh.
     //    Track how many of the in-range ring still need a mesh, for progress.
     let needed = 0;
@@ -400,7 +460,20 @@ export class World {
       }
     }
 
-    // 3) Process a bounded slice of the remesh queue, nearest-first.
+    // 3) Drain pending light propagation, then fold every chunk it touched
+    //    into the remesh queue. Bounded per frame so a big cave breakthrough
+    //    (which can cascade daylight across several chunks) spreads its cost
+    //    over a few frames instead of dropping one.
+    if (this.lighting.pending > 0) this.lighting.update(24000);
+    const litDirty = this.lighting.takeDirtyChunks();
+    if (litDirty) {
+      for (const key of litDirty) {
+        const c = this.chunks.get(key);
+        if (c) { c.dirty = true; this.remeshQueue.add(key); }
+      }
+    }
+
+    // 4) Process a bounded slice of the remesh queue, nearest-first.
     this._processRemeshQueue(acx, acz, 3);
 
     // 4) Loading progress + world:ready, only while priming the first ring.
@@ -465,12 +538,19 @@ export class World {
     const scene = this.game && this.game.scene;
     const key = chunkKey(chunk.cx, chunk.cz);
 
-    // Sample neighbours through getBlock so border faces cull correctly.
+    // Sample neighbours through getBlock so border faces cull correctly, and
+    // through getLightByte so smooth lighting blends across the chunk seam
+    // instead of stopping dead at the boundary.
     const getBlock = (wx, wy, wz) => this.getBlock(wx, wy, wz);
+    const getLight = (wx, wy, wz) => this.getLightByte(wx, wy, wz);
+    const settings = (this.game && this.game.state && this.game.state.settings) || {};
     let data;
     try {
       data = meshChunk(chunk, getBlock, {
         ao: true,
+        smoothLighting: settings.smoothLighting !== false,
+        atlas: this.atlas,
+        getLight,
         worldOffset: { x: chunk.cx * CHUNK_SX, z: chunk.cz * CHUNK_SZ },
       });
     } catch (err) {
@@ -508,7 +588,14 @@ export class World {
     const geom = new T.BufferGeometry();
     geom.setAttribute('position', new T.BufferAttribute(new Float32Array(bucket.positions), 3));
     geom.setAttribute('normal', new T.BufferAttribute(new Float32Array(bucket.normals), 3));
-    geom.setAttribute('color', new T.BufferAttribute(new Float32Array(bucket.colors), 3));
+    // Custom attribute names (aColor/aLight/aAO/aTexIdx) rather than Three's
+    // built-in `color`: the voxel shader declares them itself, and reusing the
+    // built-in name would collide with the vertexColors machinery.
+    geom.setAttribute('aColor', new T.BufferAttribute(new Float32Array(bucket.colors), 3));
+    geom.setAttribute('aLight', new T.BufferAttribute(new Float32Array(bucket.light), 2));
+    geom.setAttribute('aAO', new T.BufferAttribute(new Float32Array(bucket.ao), 1));
+    geom.setAttribute('uv', new T.BufferAttribute(new Float32Array(bucket.uv), 2));
+    geom.setAttribute('aTexIdx', new T.BufferAttribute(new Float32Array(bucket.texIdx), 1));
     geom.setIndex(new T.BufferAttribute(new Uint32Array(bucket.indices), 1));
     geom.computeBoundingSphere();
 
