@@ -54,6 +54,12 @@ export class Input {
     this.locked = false;
     this.enabled = true;            // when false (menus), gameplay input is ignored
 
+    // Some embeddings (sandboxed iframes without allow="pointer-lock") refuse
+    // the Pointer Lock API. `virtualLock` is our fallback: we hide the cursor
+    // and steer with raw mousemove deltas instead, so looking around still works.
+    this.virtualLock = false;
+    this._lockUnavailable = false;
+
     this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
 
     this._bind();
@@ -99,10 +105,10 @@ export class Input {
     };
     this._onContext = (e) => e.preventDefault();
     this._onPointerLockChange = () => {
-      this.locked = document.pointerLockElement === this.canvas;
-      if (this.state) this.state.setFlag('pointerLocked', this.locked);
-      if (this.events) this.events.emit('pointerlock', { locked: this.locked });
+      if (this.virtualLock) return;   // the real API isn't the one steering us
+      this._setLocked(document.pointerLockElement === this.canvas);
     };
+    this._onPointerLockError = () => this._useVirtualLock();
 
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
@@ -113,6 +119,7 @@ export class Input {
     this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContext);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
+    document.addEventListener('pointerlockerror', this._onPointerLockError);
   }
 
   dispose() {
@@ -125,16 +132,48 @@ export class Input {
     this.canvas.removeEventListener('wheel', this._onWheel);
     this.canvas.removeEventListener('contextmenu', this._onContext);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
+    document.removeEventListener('pointerlockerror', this._onPointerLockError);
   }
 
   /* ---- pointer lock ---- */
-  requestLock() {
-    if (this.canvas.requestPointerLock) {
-      const p = this.canvas.requestPointerLock();
-      if (p && typeof p.catch === 'function') p.catch(() => {});
-    }
+  _setLocked(locked) {
+    if (this.locked === locked) return;
+    this.locked = locked;
+    if (this.state) this.state.setFlag('pointerLocked', locked);
+    if (this.events) this.events.emit('pointerlock', { locked, virtual: this.virtualLock });
   }
+
+  // Fall back to cursor-hidden mousemove steering when real pointer lock is
+  // denied. Once denied we stop asking, so we don't spam failing requests.
+  _useVirtualLock() {
+    this._lockUnavailable = true;
+    this.virtualLock = true;
+    this.canvas.classList.add('virtual-lock');
+    this._setLocked(true);
+  }
+
+  requestLock() {
+    if (this._lockUnavailable || !this.canvas.requestPointerLock) {
+      this._useVirtualLock();
+      return;
+    }
+    let p;
+    try {
+      p = this.canvas.requestPointerLock();
+    } catch (e) {
+      this._useVirtualLock();
+      return;
+    }
+    if (p && typeof p.catch === 'function') p.catch(() => this._useVirtualLock());
+  }
+
   exitLock() {
+    if (this.virtualLock) {
+      this.virtualLock = false;
+      this.canvas.classList.remove('virtual-lock');
+      this._setLocked(false);
+      return;
+    }
     if (document.exitPointerLock) document.exitPointerLock();
   }
 

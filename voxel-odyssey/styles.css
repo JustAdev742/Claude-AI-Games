@@ -45,6 +45,9 @@ html, body {
   background: linear-gradient(#8fc7ff, #cfe8ff);
   image-rendering: auto;
 }
+/* Fallback look-mode (pointer lock denied, e.g. inside a sandboxed iframe):
+   hide the cursor so the crosshair reads as the aim point. */
+#game-canvas.virtual-lock { cursor: none; }
 
 /* ---- UI layers --------------------------------------------------------- */
 #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }

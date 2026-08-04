@@ -20,8 +20,16 @@ audio (no asset files anywhere).
 
 ## ▶️ Play
 
-The game uses ES modules + an import map, so it must be served over HTTP (not
-opened as a `file://`). From this folder:
+### The quick way — one file, no server
+
+Download **[`dist/voxel-odyssey.html`](dist/voxel-odyssey.html)** and double-click
+it. That's the whole game — engine, Three.js, art and audio — in a single 1.5 MB
+file with everything inlined, so it opens straight from disk and works offline.
+
+### From source
+
+The source runs unbundled via ES modules + an import map, which browsers only
+allow over HTTP. From this folder:
 
 ```bash
 # pick any one:
@@ -33,6 +41,16 @@ npx http-server -p 8080 .
 Then open <http://localhost:8080> and click **New World**.
 
 > Click the screen to capture the mouse. Press **Esc** to pause / release it.
+> Where a page embeds the game and blocks the Pointer Lock API, it falls back
+> automatically to hiding the cursor and steering on raw mouse movement.
+
+### Rebuilding the single file
+
+```bash
+npm install          # esbuild, the only dev dependency
+npm run build        # -> dist/voxel-odyssey.html
+npm run build:fragment   # same, minus the <html>/<head>/<body> wrapper, for embedding
+```
 
 ## 🎮 Controls
 
@@ -91,13 +109,15 @@ js/
   fx/     particles, audio, sky
   ui/     hud, menus
 tests/  run.js (node logic tests) + smoke.mjs (headless browser test)
+tools/  build-single-file.mjs (inlines everything into dist/voxel-odyssey.html)
 ```
 
 ## 🧪 Tests
 
 ```bash
-node tests/run.js      # pure-logic unit tests (noise, worldgen, meshing, inventory, crafting)
-node tests/smoke.mjs   # headless-Chromium smoke test (boots a world, checks it renders)
+node tests/run.js       # pure-logic unit tests (noise, worldgen, meshing, inventory, crafting)
+node tests/smoke.mjs    # headless-Chromium smoke test (boots a world, checks it renders)
+node tests/interact.mjs # drives real gameplay: block edits, crafting, mobs, falling & landing
 ```
 
 ## 📄 License

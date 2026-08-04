@@ -152,7 +152,10 @@ async function main() {
     await page.evaluate(() => {
       const g = window.GAME;
       g.player.setGamemode('survival'); g.player.flying = false;
-      const px = Math.round(g.player.position.x), pz = Math.round(g.player.position.z);
+      // Math.floor, not round: the voxel column a player at x=5.5 stands in is
+      // 5. Rounding a .5 coordinate lands on the *neighbouring* column and
+      // compares against the wrong ground height wherever terrain steps.
+      const px = Math.floor(g.player.position.x), pz = Math.floor(g.player.position.z);
       const h = g.world.heightAt(px, pz);
       g.player.position.set(px + 0.5, h + 6, pz + 0.5);
       g.player.velocity.set(0, 0, 0);
@@ -160,7 +163,7 @@ async function main() {
     await sleep(2200);
     const landing = await page.evaluate(() => {
       const g = window.GAME;
-      const px = Math.round(g.player.position.x), pz = Math.round(g.player.position.z);
+      const px = Math.floor(g.player.position.x), pz = Math.floor(g.player.position.z);
       const h = g.world.heightAt(px, pz);
       return {
         onGround: g.player.onGround,
