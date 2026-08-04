@@ -31,6 +31,7 @@ import Blocks, { ID } from './blocks.js';
 import { chunkKey, voxelKey, clamp } from '../core/utils.js';
 import { LightEngine } from './lighting.js';
 import { createSharedUniforms, createVoxelMaterials, updateVoxelUniforms } from '../render/material.js';
+import { MeshPool } from './meshPool.js';
 
 export class World {
   constructor(game) {
@@ -69,6 +70,12 @@ export class World {
     // procedural set) is loaded. The mesher and shader both handle null.
     this.atlas = null;
 
+    // Worker pool for chunk meshing. Meshing is the largest single block of
+    // main-thread work during streaming; moving it off-thread is what stops
+    // flying into new terrain from stuttering. Falls back to synchronous
+    // meshing when Workers aren't available.
+    this.meshPool = new MeshPool(this);
+
     // Streaming bookkeeping.
     this._anchorCX = 0;
     this._anchorCZ = 0;
@@ -91,6 +98,7 @@ export class World {
     this.matOpaque = mats.opaque;
     this.matWater = mats.water;
     this.matCross = mats.foliage;
+    this.meshPool.init();
     return this;
   }
 
@@ -102,6 +110,8 @@ export class World {
       this.uniforms.uAtlas.value = atlas ? atlas.texture : null;
       this.uniforms.uHasAtlas.value = atlas ? 1 : 0;
     }
+    // Workers hold their own copy of the face->layer table.
+    this.meshPool.setAtlas(this.atlas);
     // Every chunk's UVs are now stale.
     for (const [key, chunk] of this.chunks) {
       chunk.dirty = true;
@@ -119,6 +129,9 @@ export class World {
     // Drop any in-flight light propagation — it references chunks that no
     // longer exist, and stale queue entries would dirty the new world's chunks.
     this.lighting.reset();
+    // Bump the pool's generation so results for the old world are discarded
+    // rather than uploaded onto chunks that no longer exist.
+    this.meshPool.reset();
 
     this.seed = seed | 0;
     this._primed = false;
@@ -487,6 +500,11 @@ export class World {
     // 4) Process a bounded slice of the remesh queue, nearest-first.
     this._processRemeshQueue(acx, acz, 3);
 
+    // Re-rank queued mesh jobs against the player's current position:
+    // streaming enqueues faster than the pool drains, so without this a
+    // player flying forward waits on chunks queued behind them.
+    this.meshPool.update(acx, acz);
+
     // 4) Loading progress + world:ready, only while priming the first ring.
     const events = this.game && this.game.events;
     if (!this._primed) {
@@ -528,17 +546,36 @@ export class World {
       return da - db;
     });
 
+    // With workers the per-frame budget is much larger: dispatching a job is
+    // just packing a buffer, and the meshing itself no longer competes with
+    // rendering. Without them we stay conservative, since each build blocks
+    // the frame.
+    const usingWorkers = this.meshPool.enabled;
+    const effectiveBudget = usingWorkers ? budget * 8 : budget;
+
     let built = 0;
-    for (let i = 0; i < keys.length && built < budget; i++) {
+    for (let i = 0; i < keys.length && built < effectiveBudget; i++) {
       const key = keys[i];
-      this.remeshQueue.delete(key);
       const chunk = this.chunks.get(key);
-      if (!chunk) continue;      // was unloaded between queueing and now
-      this._buildChunkMesh(chunk);
+      if (!chunk) { this.remeshQueue.delete(key); continue; }
+
+      if (usingWorkers) {
+        // Don't pile more onto a saturated pool — leaving the chunk queued
+        // keeps it eligible for re-prioritisation as the player moves.
+        if (this.meshPool.inFlight.size >= this.meshPool.workers.length * 2) break;
+        const dx = chunk.cx - acx, dz = chunk.cz - acz;
+        this.meshPool.request(chunk, dx * dx + dz * dz);
+      } else {
+        // _uploadChunkGeometry emits 'chunk:meshed' for both paths.
+        this._buildChunkMesh(chunk);
+      }
+
+      this.remeshQueue.delete(key);
+      // Cleared at dispatch either way. On the worker path the geometry
+      // arrives a few frames later; leaving the flag set would have the
+      // streaming loop re-queue the same chunk every frame in the meantime.
       chunk.dirty = false;
       built++;
-      const events = this.game && this.game.events;
-      if (events) events.emit('chunk:meshed', { cx: chunk.cx, cz: chunk.cz });
     }
   }
 
@@ -569,6 +606,15 @@ export class World {
       return;
     }
     if (!data) return;
+    this._uploadChunkGeometry(chunk, data);
+  }
+
+  /* Turn meshed buckets into GPU geometry. Split out from _buildChunkMesh so
+     the worker path — which produces the same bucket shape, already as typed
+     arrays — reuses it verbatim. */
+  _uploadChunkGeometry(chunk, data) {
+    const scene = this.game && this.game.scene;
+    const key = chunkKey(chunk.cx, chunk.cz);
 
     const existing = this.meshes.get(key) || { opaque: null, water: null, cross: null };
     const next = { opaque: null, water: null, cross: null };
@@ -578,6 +624,9 @@ export class World {
     next.cross = this._swapBucket(existing.cross, data.cross, this.matCross, chunk, scene, 'cross');
 
     this.meshes.set(key, next);
+
+    const events = this.game && this.game.events;
+    if (events) events.emit('chunk:meshed', { cx: chunk.cx, cz: chunk.cz });
   }
 
   // Build/replace a single bucket mesh from plain mesher arrays. Returns the
@@ -596,18 +645,24 @@ export class World {
       return null;
     }
 
+    // Worker results already arrive as typed arrays (transferred, not copied);
+    // main-thread meshing produces plain arrays. Wrapping only when needed
+    // avoids a redundant copy of every chunk's vertex data on the worker path.
+    const f32 = (a) => (a instanceof Float32Array ? a : new Float32Array(a));
+    const u32 = (a) => (a instanceof Uint32Array ? a : new Uint32Array(a));
+
     const geom = new T.BufferGeometry();
-    geom.setAttribute('position', new T.BufferAttribute(new Float32Array(bucket.positions), 3));
-    geom.setAttribute('normal', new T.BufferAttribute(new Float32Array(bucket.normals), 3));
+    geom.setAttribute('position', new T.BufferAttribute(f32(bucket.positions), 3));
+    geom.setAttribute('normal', new T.BufferAttribute(f32(bucket.normals), 3));
     // Custom attribute names (aColor/aLight/aAO/aTexIdx) rather than Three's
     // built-in `color`: the voxel shader declares them itself, and reusing the
     // built-in name would collide with the vertexColors machinery.
-    geom.setAttribute('aColor', new T.BufferAttribute(new Float32Array(bucket.colors), 3));
-    geom.setAttribute('aLight', new T.BufferAttribute(new Float32Array(bucket.light), 2));
-    geom.setAttribute('aAO', new T.BufferAttribute(new Float32Array(bucket.ao), 1));
-    geom.setAttribute('uv', new T.BufferAttribute(new Float32Array(bucket.uv), 2));
-    geom.setAttribute('aTexIdx', new T.BufferAttribute(new Float32Array(bucket.texIdx), 1));
-    geom.setIndex(new T.BufferAttribute(new Uint32Array(bucket.indices), 1));
+    geom.setAttribute('aColor', new T.BufferAttribute(f32(bucket.colors), 3));
+    geom.setAttribute('aLight', new T.BufferAttribute(f32(bucket.light), 2));
+    geom.setAttribute('aAO', new T.BufferAttribute(f32(bucket.ao), 1));
+    geom.setAttribute('uv', new T.BufferAttribute(f32(bucket.uv), 2));
+    geom.setAttribute('aTexIdx', new T.BufferAttribute(f32(bucket.texIdx), 1));
+    geom.setIndex(new T.BufferAttribute(u32(bucket.indices), 1));
     geom.computeBoundingSphere();
 
     if (oldMesh) {
