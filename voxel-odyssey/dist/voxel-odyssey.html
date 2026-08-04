@@ -398,6 +398,66 @@ hr.sep { border: none; border-top: 1px solid #ffffff12; margin: 16px 0; }
 ::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ---- resource-pack drop hint ------------------------------------------- */
+/* Shown while a file is dragged over the window, and briefly after a pack
+   loads or fails. Sits above everything, ignores pointer events so it can
+   never eat the drop itself. */
+#pack-drop-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  z-index: 100;
+  pointer-events: none;
+  max-width: min(90vw, 640px);
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: 2px dashed rgba(255, 255, 255, 0.35);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+#pack-drop-hint[hidden] { display: none; }
+#pack-drop-hint[data-kind='ok'] { border-color: var(--accent); border-style: solid; }
+#pack-drop-hint[data-kind='error'] { border-color: var(--danger); border-style: solid; }
+
+/* ---- key rebinding list ------------------------------------------------ */
+.keybind-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.keybind-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--slot);
+  border: 1px solid var(--slot-border);
+}
+.keybind-name { color: var(--ink-dim); font-size: 14px; }
+.keybind-key {
+  min-width: 120px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--slot-border);
+  background: var(--panel-2);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  cursor: pointer;
+}
+.keybind-key:hover { border-color: var(--accent); }
+.keybind-key:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
   </style>
 </head>
 <body>
@@ -9878,7 +9938,7 @@ function WebGLBackground(renderer, cubemaps, cubeuvmaps, state, objects, alpha, 
   const clearColor = new Color(0);
   let clearAlpha = alpha === true ? 0 : 1;
   let planeMesh;
-  let boxMesh;
+  let boxMesh2;
   let currentBackground = null;
   let currentBackgroundVersion = 0;
   let currentTonemapping = null;
@@ -9905,8 +9965,8 @@ function WebGLBackground(renderer, cubemaps, cubeuvmaps, state, objects, alpha, 
       renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     }
     if (background && (background.isCubeTexture || background.mapping === CubeUVReflectionMapping)) {
-      if (boxMesh === void 0) {
-        boxMesh = new Mesh(
+      if (boxMesh2 === void 0) {
+        boxMesh2 = new Mesh(
           new BoxGeometry(1, 1, 1),
           new ShaderMaterial({
             name: "BackgroundCubeMaterial",
@@ -9919,31 +9979,31 @@ function WebGLBackground(renderer, cubemaps, cubeuvmaps, state, objects, alpha, 
             fog: false
           })
         );
-        boxMesh.geometry.deleteAttribute("normal");
-        boxMesh.geometry.deleteAttribute("uv");
-        boxMesh.onBeforeRender = function(renderer2, scene2, camera) {
+        boxMesh2.geometry.deleteAttribute("normal");
+        boxMesh2.geometry.deleteAttribute("uv");
+        boxMesh2.onBeforeRender = function(renderer2, scene2, camera) {
           this.matrixWorld.copyPosition(camera.matrixWorld);
         };
-        Object.defineProperty(boxMesh.material, "envMap", {
+        Object.defineProperty(boxMesh2.material, "envMap", {
           get: function() {
             return this.uniforms.envMap.value;
           }
         });
-        objects.update(boxMesh);
+        objects.update(boxMesh2);
       }
-      boxMesh.material.uniforms.envMap.value = background;
-      boxMesh.material.uniforms.flipEnvMap.value = background.isCubeTexture && background.isRenderTargetTexture === false ? -1 : 1;
-      boxMesh.material.uniforms.backgroundBlurriness.value = scene.backgroundBlurriness;
-      boxMesh.material.uniforms.backgroundIntensity.value = scene.backgroundIntensity;
-      boxMesh.material.toneMapped = ColorManagement.getTransfer(background.colorSpace) !== SRGBTransfer;
+      boxMesh2.material.uniforms.envMap.value = background;
+      boxMesh2.material.uniforms.flipEnvMap.value = background.isCubeTexture && background.isRenderTargetTexture === false ? -1 : 1;
+      boxMesh2.material.uniforms.backgroundBlurriness.value = scene.backgroundBlurriness;
+      boxMesh2.material.uniforms.backgroundIntensity.value = scene.backgroundIntensity;
+      boxMesh2.material.toneMapped = ColorManagement.getTransfer(background.colorSpace) !== SRGBTransfer;
       if (currentBackground !== background || currentBackgroundVersion !== background.version || currentTonemapping !== renderer.toneMapping) {
-        boxMesh.material.needsUpdate = true;
+        boxMesh2.material.needsUpdate = true;
         currentBackground = background;
         currentBackgroundVersion = background.version;
         currentTonemapping = renderer.toneMapping;
       }
-      boxMesh.layers.enableAll();
-      renderList.unshift(boxMesh, boxMesh.geometry, boxMesh.material, 0, 0, null);
+      boxMesh2.layers.enableAll();
+      renderList.unshift(boxMesh2, boxMesh2.geometry, boxMesh2.material, 0, 0, null);
     } else if (background && background.isTexture) {
       if (planeMesh === void 0) {
         planeMesh = new Mesh(
@@ -31169,8 +31229,25 @@ var DEFAULT_SETTINGS = {
   smoothLighting: true,
   daylightSpeed: 1,
   // multiplier on the day/night cycle
-  gamemode: "survival"
+  gamemode: "survival",
   // 'survival' | 'creative'
+  // ---- look feel ----
+  // Camera smoothing blends raw mouse deltas over a few frames. Kept off by
+  // default: it adds input latency, which players used to raw mouse input
+  // notice immediately, but it visibly helps low-DPI mice and gamepads.
+  lookSmoothing: 0,
+  // 0 = raw (1:1), 1 = heavily smoothed
+  gamepadEnabled: true,
+  gamepadLookSpeed: 2.6,
+  // radians/sec at full stick deflection
+  gamepadDeadzone: 0.18,
+  // ---- multiplayer ----
+  serverUrl: "",
+  playerName: "",
+  // Custom key bindings, action -> array of KeyboardEvent.code. Empty means
+  // "use the defaults"; only actions the player actually rebinds are stored,
+  // so adding a new action later doesn't need a settings migration.
+  keyBindings: {}
 };
 function safeLocalStorage() {
   try {
@@ -31334,6 +31411,18 @@ var Input = class {
     this.virtualLock = false;
     this._lockUnavailable = false;
     this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
+    this.gamepad = {
+      connected: false,
+      moveX: 0,
+      moveZ: 0,
+      lookX: 0,
+      lookZ: 0,
+      buttons: /* @__PURE__ */ new Set(),
+      _prevButtons: /* @__PURE__ */ new Set(),
+      index: -1
+    };
+    this._smoothDX = 0;
+    this._smoothDY = 0;
     this._bind();
   }
   /* ---- event wiring ---- */
@@ -31470,6 +31559,28 @@ var Input = class {
   setBinding(name, codes) {
     this.bindings[name] = codes;
   }
+  /* Overlay the player's saved rebinds onto the defaults. Only overridden
+     actions are stored, so a build that adds a new action still gets its
+     default binding instead of an undefined one. */
+  applyBindings(custom) {
+    this.bindings = JSON.parse(JSON.stringify(DEFAULT_BINDINGS));
+    if (!custom) return;
+    for (const [action, codes] of Object.entries(custom)) {
+      if (Array.isArray(codes) && codes.length) this.bindings[action] = codes.slice();
+    }
+  }
+  defaultBindings() {
+    return JSON.parse(JSON.stringify(DEFAULT_BINDINGS));
+  }
+  /* Which action, if any, already uses this key — so the rebind UI can warn
+     about a conflict instead of silently creating one. */
+  actionUsing(code, exceptAction) {
+    for (const [action, codes] of Object.entries(this.bindings)) {
+      if (action === exceptAction) continue;
+      if (codes.includes(code)) return action;
+    }
+    return null;
+  }
   mouseDown(button) {
     return this.buttons.has(button);
   }
@@ -31493,12 +31604,88 @@ var Input = class {
     if (this.action("forward")) z -= 1;
     x += this.touch.mx;
     z += this.touch.my;
+    x += this.gamepad.moveX;
+    z += this.gamepad.moveZ;
     const len = Math.hypot(x, z);
     if (len > 1) {
       x /= len;
       z /= len;
     }
     return { x, z };
+  }
+  /* ---- gamepad ---------------------------------------------------------
+     Polled, not event-driven: the Gamepad API only exposes state snapshots,
+     and browsers deliberately don't fire events for stick motion. */
+  pollGamepad(settings) {
+    const gp = this.gamepad;
+    gp.moveX = 0;
+    gp.moveZ = 0;
+    gp.lookX = 0;
+    gp.lookZ = 0;
+    if (!settings || settings.gamepadEnabled === false) {
+      gp.connected = false;
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.getGamepads) {
+      gp.connected = false;
+      return;
+    }
+    const pads = navigator.getGamepads();
+    let pad = null;
+    for (const p of pads) {
+      if (p && p.connected) {
+        pad = p;
+        break;
+      }
+    }
+    if (!pad) {
+      gp.connected = false;
+      gp._prevButtons = gp.buttons;
+      gp.buttons = /* @__PURE__ */ new Set();
+      return;
+    }
+    gp.connected = true;
+    gp.index = pad.index;
+    const dz = settings.gamepadDeadzone != null ? settings.gamepadDeadzone : 0.18;
+    const applyDeadzone = (x, y) => {
+      const mag = Math.hypot(x, y);
+      if (mag < dz) return [0, 0];
+      const scaled = (mag - dz) / (1 - dz);
+      return [x / mag * scaled, y / mag * scaled];
+    };
+    const [lx, ly] = applyDeadzone(pad.axes[0] || 0, pad.axes[1] || 0);
+    gp.moveX = lx;
+    gp.moveZ = ly;
+    const [rx, ry] = applyDeadzone(pad.axes[2] || 0, pad.axes[3] || 0);
+    gp.lookX = rx * Math.abs(rx);
+    gp.lookZ = ry * Math.abs(ry);
+    gp._prevButtons = gp.buttons;
+    gp.buttons = /* @__PURE__ */ new Set();
+    for (let i = 0; i < pad.buttons.length; i++) {
+      if (pad.buttons[i] && pad.buttons[i].pressed) gp.buttons.add(i);
+    }
+  }
+  // Standard-layout button indices, named so callers read clearly.
+  padDown(button) {
+    return this.gamepad.buttons.has(button);
+  }
+  padPressed(button) {
+    return this.gamepad.buttons.has(button) && !this.gamepad._prevButtons.has(button);
+  }
+  /* Smoothed look delta for this frame. Smoothing is an exponential blend
+     toward the raw delta; at 0 it returns the raw value unchanged so the
+     default path is exactly 1:1 with the mouse. */
+  lookDelta(smoothing) {
+    const raw = { dx: this.mouseDX || 0, dy: this.mouseDY || 0 };
+    const s = Math.max(0, Math.min(0.95, smoothing || 0));
+    if (s <= 0) {
+      this._smoothDX = raw.dx;
+      this._smoothDY = raw.dy;
+      return raw;
+    }
+    this._smoothDX = this._smoothDX * s + raw.dx * (1 - s);
+    this._smoothDY = this._smoothDY * s + raw.dy * (1 - s);
+    return { dx: this._smoothDX, dy: this._smoothDY };
   }
   /* ---- per-frame cleanup ---- */
   lateUpdate() {
@@ -33504,6 +33691,7 @@ var Chunk = class _Chunk {
     this.light = new Uint8Array(CHUNK_VOL);
     this.dirty = true;
     this.generated = false;
+    this.lit = false;
     this.empty = true;
   }
   /* -------- bounds helpers -------- */
@@ -33531,14 +33719,31 @@ var Chunk = class _Chunk {
     if (v !== ID.AIR) this.empty = false;
     this.dirty = true;
   }
-  // Get skylight (0..15) at a local coordinate; 0 if out of range.
-  getLight(lx, y, lz) {
+  // Raw packed light byte (sky << 4 | block); 0 if out of range.
+  getLightByte(lx, y, lz) {
     if (!_Chunk.inBounds(lx, y, lz)) return 0;
     return this.light[localIndex(lx, y, lz)];
   }
-  setLight(lx, y, lz, value) {
+  // Skylight 0..15 — daylight reaching this voxel, scaled by time of day
+  // at render time.
+  getSkyLight(lx, y, lz) {
+    if (!_Chunk.inBounds(lx, y, lz)) return 0;
+    return this.light[localIndex(lx, y, lz)] >> 4 & 15;
+  }
+  setSkyLight(lx, y, lz, value) {
     if (!_Chunk.inBounds(lx, y, lz)) return;
-    this.light[localIndex(lx, y, lz)] = value & 15;
+    const i = localIndex(lx, y, lz);
+    this.light[i] = this.light[i] & 15 | (value & 15) << 4;
+  }
+  // Blocklight 0..15 — torches and other emitters, independent of time of day.
+  getBlockLight(lx, y, lz) {
+    if (!_Chunk.inBounds(lx, y, lz)) return 0;
+    return this.light[localIndex(lx, y, lz)] & 15;
+  }
+  setBlockLight(lx, y, lz, value) {
+    if (!_Chunk.inBounds(lx, y, lz)) return;
+    const i = localIndex(lx, y, lz);
+    this.light[i] = this.light[i] & 240 | value & 15;
   }
   // Inclusive vertical fill of one column with a single id. Clamps to range.
   fillColumn(lx, lz, fromY, toY, id) {
@@ -33572,6 +33777,7 @@ var Chunk = class _Chunk {
     this.light.fill(0);
     this.empty = true;
     this.generated = false;
+    this.lit = false;
     this.dirty = true;
   }
 };
@@ -33613,9 +33819,12 @@ function buildAOOffsets() {
 }
 var TINT_AMOUNT = 0.045;
 var TINT_SEED = 1337;
+var WHITE = [1, 1, 1];
 function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false;
+  const smooth = opts.smoothLighting !== false;
+  const atlas = opts.atlas || null;
   const off = opts.worldOffset || { x: chunk ? chunk.cx * CHUNK_SX : 0, z: chunk ? chunk.cz * CHUNK_SZ : 0 };
   const ox = off.x | 0;
   const oz = off.z | 0;
@@ -33624,6 +33833,7 @@ function meshChunk(chunk, getBlock, opts) {
   const cross = newBucket();
   if (!chunk || !chunk.blocks) return { opaque, water, cross };
   const blocks = chunk.blocks;
+  const lightArr = chunk.light;
   const sample = (wx, wy, wz) => {
     const lx = wx - ox;
     const lz = wz - oz;
@@ -33636,6 +33846,22 @@ function meshChunk(chunk, getBlock, opts) {
     }
     return ID.AIR;
   };
+  const getLightFn = opts.getLight;
+  const sampleLight = (wx, wy, wz) => {
+    if (wy >= CHUNK_SY) return 240;
+    if (wy < 0) return 0;
+    const lx = wx - ox;
+    const lz = wz - oz;
+    if (lx >= 0 && lx < CHUNK_SX && lz >= 0 && lz < CHUNK_SZ) {
+      return lightArr[localIndex(lx, wy, lz)];
+    }
+    if (typeof getLightFn === "function") {
+      const v = getLightFn(wx, wy, wz);
+      return v === void 0 || v === null ? 0 : v;
+    }
+    return 0;
+  };
+  const ctx = { sample, sampleLight, ao, smooth, atlas };
   for (let lx = 0; lx < CHUNK_SX; lx++) {
     const wx = ox + lx;
     for (let lz = 0; lz < CHUNK_SZ; lz++) {
@@ -33646,11 +33872,11 @@ function meshChunk(chunk, getBlock, opts) {
         if (id === ID.AIR) continue;
         const render = blocks_default.renderType(id);
         if (render === "cross") {
-          emitCross(cross, id, lx, y, lz);
+          emitCross(cross, ctx, id, wx, y, wz, lx, y, lz);
         } else if (render === "liquid") {
-          emitLiquid(water, sample, id, wx, y, wz, lx, y, lz, ao);
+          emitLiquid(water, ctx, id, wx, y, wz, lx, y, lz);
         } else {
-          emitCube(opaque, sample, id, wx, y, wz, lx, y, lz, ao);
+          emitCube(opaque, ctx, id, wx, y, wz, lx, y, lz);
         }
       }
     }
@@ -33658,74 +33884,73 @@ function meshChunk(chunk, getBlock, opts) {
   return { opaque, water, cross };
 }
 function newBucket() {
-  return { positions: [], normals: [], colors: [], indices: [] };
+  return {
+    positions: [],
+    normals: [],
+    colors: [],
+    light: [],
+    ao: [],
+    uv: [],
+    texIdx: [],
+    indices: []
+  };
 }
-function emitCube(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
+function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   for (let f = 0; f < 6; f++) {
     const dir = FACES[f].dir;
     const nx = wx + dir[0];
     const ny = wy_ + dir[1];
     const nz = wz + dir[2];
-    const neighbor = sample(nx, ny, nz);
+    const neighbor = ctx.sample(nx, ny, nz);
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
-    const base = blocks_default.faceColor(id, f);
     const shade2 = FACE_SHADE[f];
-    const tinted = tintVariation(base, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+    const source = tile ? WHITE : blocks_default.faceColor(id, f);
+    const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
     const r = tinted[0] * shade2;
     const g = tinted[1] * shade2;
     const b = tinted[2] * shade2;
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, ao ? aoForFace(sample, f, wx, wy_, wz) : null);
+    const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
+    const lit = lightForFace(ctx, f, wx, wy_, wz);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, tile);
   }
 }
-function emitLiquid(bucket, sample, id, wx, wy_, wz, lx, ly, lz, ao) {
-  const aboveIsWater = blocks_default.isLiquid(sample(wx, wy_ + 1, wz));
+function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
+  const aboveIsWater = blocks_default.isLiquid(ctx.sample(wx, wy_ + 1, wz));
   const topY = aboveIsWater ? 1 : 0.88;
   for (let f = 0; f < 6; f++) {
     const dir = FACES[f].dir;
     const nx = wx + dir[0];
     const ny = wy_ + dir[1];
     const nz = wz + dir[2];
-    const neighbor = sample(nx, ny, nz);
+    const neighbor = ctx.sample(nx, ny, nz);
     if (blocks_default.isLiquid(neighbor)) continue;
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
-    const base = blocks_default.faceColor(id, f);
     const shade2 = FACE_SHADE[f];
+    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+    const base = tile ? WHITE : blocks_default.faceColor(id, f);
     const r = base[0] * shade2;
     const g = base[1] * shade2;
     const b = base[2] * shade2;
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 1 - topY, null);
+    const lit = lightForFace(ctx, f, wx, wy_, wz);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 1 - topY, null, lit, tile);
   }
 }
-function emitCross(bucket, id, lx, ly, lz) {
-  const color = blocks_default.faceColor(id, 2);
-  const inset = 0;
+function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
+  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
+  const color = tile ? WHITE : blocks_default.faceColor(id, 2);
+  const packed = ctx.sampleLight(wx, wy_, wz);
+  const sky = (packed >> 4 & 15) / 15;
+  const blk = (packed & 15) / 15;
+  const lit = [sky, blk, sky, blk, sky, blk, sky, blk];
+  const inset = 0.02;
   const x0 = lx + inset, x1 = lx + 1 - inset;
   const z0 = lz + inset, z1 = lz + 1 - inset;
   const y0 = ly, y1 = ly + 1;
   const r = color[0], g = color[1], b = color[2];
   const n = [0, 1, 0];
-  addQuad(
-    bucket,
-    [x0, y1, z0],
-    [x0, y0, z0],
-    [x1, y0, z1],
-    [x1, y1, z1],
-    n,
-    r,
-    g,
-    b
-  );
-  addQuad(
-    bucket,
-    [x0, y1, z1],
-    [x0, y0, z1],
-    [x1, y0, z0],
-    [x1, y1, z0],
-    n,
-    r,
-    g,
-    b
-  );
+  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, tile);
+  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, tile);
 }
 function aoForFace(sample, f, wx, wy_, wz) {
   const dir = FACES[f].dir;
@@ -33743,11 +33968,60 @@ function aoForFace(sample, f, wx, wy_, wz) {
   }
   return out;
 }
-function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr) {
+var _litScratch = new Array(8);
+function lightForFace(ctx, f, wx, wy_, wz) {
+  const dir = FACES[f].dir;
+  const bx = wx + dir[0];
+  const by = wy_ + dir[1];
+  const bz = wz + dir[2];
+  const basePacked = ctx.sampleLight(bx, by, bz);
+  if (!ctx.smooth) {
+    const s = (basePacked >> 4 & 15) / 15;
+    const b = (basePacked & 15) / 15;
+    for (let i = 0; i < 8; i += 2) {
+      _litScratch[i] = s;
+      _litScratch[i + 1] = b;
+    }
+    return _litScratch.slice();
+  }
+  const offs = AO_OFFSETS[f];
+  const out = new Array(8);
+  for (let c = 0; c < 4; c++) {
+    const o = offs[c];
+    let skySum = 0, blkSum = 0, n = 0;
+    const cand = [
+      [bx, by, bz],
+      [bx + o.side1[0], by + o.side1[1], bz + o.side1[2]],
+      [bx + o.side2[0], by + o.side2[1], bz + o.side2[2]],
+      [bx + o.diag[0], by + o.diag[1], bz + o.diag[2]]
+    ];
+    for (let i = 0; i < 4; i++) {
+      const p = cand[i];
+      if (isOccluder(ctx.sample(p[0], p[1], p[2]))) continue;
+      const packed = ctx.sampleLight(p[0], p[1], p[2]);
+      skySum += packed >> 4 & 15;
+      blkSum += packed & 15;
+      n++;
+    }
+    if (n === 0) {
+      out[c * 2] = (basePacked >> 4 & 15) / 15;
+      out[c * 2 + 1] = (basePacked & 15) / 15;
+    } else {
+      out[c * 2] = skySum / n / 15;
+      out[c * 2 + 1] = blkSum / n / 15;
+    }
+  }
+  return out;
+}
+function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
   const face = FACES[f];
   const dir = face.dir;
   const corners = face.corners;
   const startVert = bucket.positions.length / 3;
+  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
+  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
+  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
+  const ti = tile ? tile.index : -1;
   for (let c = 0; c < 4; c++) {
     const cor = corners[c];
     const px2 = lx + cor[0];
@@ -33756,25 +34030,43 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr) {
     if (dropTop > 0 && cor[1] === 1) py2 -= dropTop;
     bucket.positions.push(px2, py2, pz2);
     bucket.normals.push(dir[0], dir[1], dir[2]);
-    const a = aoArr ? aoArr[c] : 1;
-    bucket.colors.push(r * a, g * a, b * a);
+    bucket.colors.push(r, g, b);
+    bucket.ao.push(aoArr ? aoArr[c] : 1);
+    bucket.light.push(lit ? lit[c * 2] : 1, lit ? lit[c * 2 + 1] : 0);
+    bucket.uv.push(uvs[c * 2], uvs[c * 2 + 1]);
+    bucket.texIdx.push(ti);
   }
-  pushQuadIndices(bucket, startVert, aoArr);
+  pushQuadIndices(bucket, startVert, aoArr, lit);
 }
-function addQuad(bucket, p0, p1, p2, p3, n, r, g, b) {
+function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, tile) {
   const startVert = bucket.positions.length / 3;
   bucket.positions.push(p0[0], p0[1], p0[2]);
   bucket.positions.push(p1[0], p1[1], p1[2]);
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
-  for (let i = 0; i < 4; i++) bucket.normals.push(n[0], n[1], n[2]);
-  for (let i = 0; i < 4; i++) bucket.colors.push(r, g, b);
-  pushQuadIndices(bucket, startVert, null);
+  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
+  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
+  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
+  const ti = tile ? tile.index : -1;
+  for (let i = 0; i < 4; i++) {
+    bucket.normals.push(n[0], n[1], n[2]);
+    bucket.colors.push(r, g, b);
+    bucket.ao.push(1);
+    bucket.light.push(lit ? lit[i * 2] : 1, lit ? lit[i * 2 + 1] : 0);
+    bucket.uv.push(uvs[i * 2], uvs[i * 2 + 1]);
+    bucket.texIdx.push(ti);
+  }
+  pushQuadIndices(bucket, startVert, null, null);
 }
-function pushQuadIndices(bucket, s, aoArr) {
+function pushQuadIndices(bucket, s, aoArr, lit) {
   let flip = false;
-  if (aoArr) {
-    if (aoArr[0] + aoArr[2] < aoArr[1] + aoArr[3]) flip = true;
+  if (aoArr || lit) {
+    const w = (i) => {
+      const a = aoArr ? aoArr[i] : 1;
+      const l = lit ? Math.max(lit[i * 2], lit[i * 2 + 1]) : 1;
+      return a * (0.35 + 0.65 * l);
+    };
+    if (w(0) + w(2) < w(1) + w(3)) flip = true;
   }
   if (flip) {
     bucket.indices.push(s + 1, s + 2, s + 3, s + 1, s + 3, s + 0);
@@ -33782,6 +34074,874 @@ function pushQuadIndices(bucket, s, aoArr) {
     bucket.indices.push(s + 0, s + 1, s + 2, s + 0, s + 2, s + 3);
   }
 }
+
+// js/world/lighting.js
+var MAX_LIGHT = 15;
+var IntQueue = class {
+  constructor(stride, initialCapacity = 4096) {
+    this.stride = stride;
+    this.data = new Int32Array(stride * initialCapacity);
+    this.head = 0;
+    this.tail = 0;
+  }
+  get length() {
+    return (this.tail - this.head) / this.stride;
+  }
+  get isEmpty() {
+    return this.head >= this.tail;
+  }
+  push(...vals) {
+    if (this.tail + this.stride > this.data.length) this._grow();
+    for (let i = 0; i < this.stride; i++) this.data[this.tail + i] = vals[i];
+    this.tail += this.stride;
+  }
+  // Reads the next record into the caller-supplied array to avoid allocating.
+  shift(out) {
+    for (let i = 0; i < this.stride; i++) out[i] = this.data[this.head + i];
+    this.head += this.stride;
+    return out;
+  }
+  clear() {
+    this.head = 0;
+    this.tail = 0;
+  }
+  _grow() {
+    if (this.head > 0) {
+      this.data.copyWithin(0, this.head, this.tail);
+      this.tail -= this.head;
+      this.head = 0;
+      if (this.tail + this.stride <= this.data.length) return;
+    }
+    const bigger = new Int32Array(this.data.length * 2);
+    bigger.set(this.data);
+    this.data = bigger;
+  }
+};
+var NEIGHBOURS = [
+  [0, 1, 0],
+  // up
+  [0, -1, 0],
+  // down  <- index 1
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 0, 1],
+  [0, 0, -1]
+];
+var DOWN = 1;
+var LightEngine = class {
+  /**
+   * @param {object} world  Host world, must provide getChunk(cx,cz) returning
+   *                        a Chunk with .blocks and .light, or null when the
+   *                        chunk isn't resident.
+   */
+  constructor(world) {
+    this.world = world;
+    this._skyAdd = new IntQueue(3);
+    this._skyRemove = new IntQueue(4);
+    this._blockAdd = new IntQueue(3);
+    this._blockRemove = new IntQueue(4);
+    this.dirtyChunks = /* @__PURE__ */ new Set();
+    this._r3 = [0, 0, 0];
+    this._r4 = [0, 0, 0, 0];
+    this._memoKey = null;
+    this._memoChunk = null;
+    this._memoCx = 2147483647;
+    this._memoCz = 2147483647;
+    this._lastDirtyCx = 2147483647;
+    this._lastDirtyCz = 2147483647;
+    this.stats = { skyNodes: 0, blockNodes: 0, relitChunks: 0 };
+  }
+  /* ---------------------------------------------------------------------
+     Chunk / voxel access. All coordinates are world-space.
+     --------------------------------------------------------------------- */
+  _chunkAt(cx, cz) {
+    if (cx === this._memoCx && cz === this._memoCz) return this._memoChunk;
+    const c = this.world.getChunk(cx, cz);
+    this._memoCx = cx;
+    this._memoCz = cz;
+    this._memoChunk = c;
+    return c;
+  }
+  _invalidateMemo() {
+    this._memoCx = 2147483647;
+    this._memoCz = 2147483647;
+    this._memoChunk = null;
+  }
+  getBlock(wx, wy, wz) {
+    if (wy < 0 || wy >= CHUNK_SY) return ID.AIR;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const c = this._chunkAt(cx, cz);
+    if (!c) return null;
+    return c.blocks[localIndex(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ)];
+  }
+  getSky(wx, wy, wz) {
+    if (wy < 0) return 0;
+    if (wy >= CHUNK_SY) return MAX_LIGHT;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const c = this._chunkAt(cx, cz);
+    if (!c) return 0;
+    return c.light[localIndex(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ)] >> 4 & 15;
+  }
+  getBlockLight(wx, wy, wz) {
+    if (wy < 0 || wy >= CHUNK_SY) return 0;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const c = this._chunkAt(cx, cz);
+    if (!c) return 0;
+    return c.light[localIndex(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ)] & 15;
+  }
+  setSky(wx, wy, wz, level) {
+    if (wy < 0 || wy >= CHUNK_SY) return false;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const c = this._chunkAt(cx, cz);
+    if (!c) return false;
+    const i = localIndex(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ);
+    c.light[i] = c.light[i] & 15 | (level & 15) << 4;
+    this._markDirty(cx, cz, wx - cx * CHUNK_SX, wz - cz * CHUNK_SZ);
+    return true;
+  }
+  setBlockLight(wx, wy, wz, level) {
+    if (wy < 0 || wy >= CHUNK_SY) return false;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const c = this._chunkAt(cx, cz);
+    if (!c) return false;
+    const i = localIndex(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ);
+    c.light[i] = c.light[i] & 240 | level & 15;
+    this._markDirty(cx, cz, wx - cx * CHUNK_SX, wz - cz * CHUNK_SZ);
+    return true;
+  }
+  // Marks the owning chunk dirty — plus any neighbour whose mesh samples this
+  // voxel. A face on a chunk border reads light from the voxel across the
+  // seam, so changing an edge voxel must re-mesh the neighbour too or a bright
+  // seam line appears along the chunk boundary.
+  //
+  // A flood fill writes light millions of times during world load, and nearly
+  // all consecutive writes land in the same chunk. Remembering the last
+  // interior chunk marked skips rebuilding the same key string over and over,
+  // which dominated load time before this cache existed.
+  _markDirty(cx, cz, lx, lz) {
+    const onBorder = lx === 0 || lx === CHUNK_SX - 1 || lz === 0 || lz === CHUNK_SZ - 1;
+    if (!onBorder && cx === this._lastDirtyCx && cz === this._lastDirtyCz) return;
+    this.dirtyChunks.add(chunkKey(cx, cz));
+    if (!onBorder) {
+      this._lastDirtyCx = cx;
+      this._lastDirtyCz = cz;
+      return;
+    }
+    if (lx === 0) this.dirtyChunks.add(chunkKey(cx - 1, cz));
+    else if (lx === CHUNK_SX - 1) this.dirtyChunks.add(chunkKey(cx + 1, cz));
+    if (lz === 0) this.dirtyChunks.add(chunkKey(cx, cz - 1));
+    else if (lz === CHUNK_SZ - 1) this.dirtyChunks.add(chunkKey(cx, cz + 1));
+  }
+  /* How much light a block absorbs when light passes through it. Air and
+     cross-shaped plants are free; glass and water dim slightly; solid blocks
+     stop light entirely. */
+  _opacity(id) {
+    if (id === ID.AIR) return 0;
+    const d = blocks_default.get(id);
+    if (!d) return MAX_LIGHT;
+    if (d.render === "cross" || d.render === "air") return 0;
+    if (d.transparent || d.liquid) return Math.max(0, Math.min(MAX_LIGHT, d.opacity));
+    return MAX_LIGHT;
+  }
+  /* --------------------------------------------------------------------
+       Initial lighting for a freshly generated chunk.
+  
+       Two passes: seed skylight down each column, then flood both channels.
+       Called once when a chunk is generated; incremental edits use
+       onBlockChanged() instead.
+       -------------------------------------------------------------------- */
+  lightChunk(chunk) {
+    if (!chunk || !chunk.blocks) return;
+    const ox = chunk.cx * CHUNK_SX;
+    const oz = chunk.cz * CHUNK_SZ;
+    chunk.light.fill(0);
+    this._invalidateMemo();
+    for (let lx = 0; lx < CHUNK_SX; lx++) {
+      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        let level = MAX_LIGHT;
+        for (let y = CHUNK_SY - 1; y >= 0; y--) {
+          const i = localIndex(lx, y, lz);
+          const op = this._opacity(chunk.blocks[i]);
+          if (op >= MAX_LIGHT) {
+            level = 0;
+          } else if (op > 0) {
+            level = Math.max(0, level - op);
+          }
+          if (level <= 0) continue;
+          chunk.light[i] = chunk.light[i] & 15 | level << 4;
+        }
+      }
+    }
+    for (let lx = 0; lx < CHUNK_SX; lx++) {
+      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        const onBorder = lx === 0 || lx === CHUNK_SX - 1 || lz === 0 || lz === CHUNK_SZ - 1;
+        for (let y = 0; y < CHUNK_SY; y++) {
+          const i = localIndex(lx, y, lz);
+          const level = chunk.light[i] >> 4 & 15;
+          if (level <= 0) continue;
+          if (onBorder) {
+            this._skyAdd.push(ox + lx, y, oz + lz);
+            continue;
+          }
+          let frontier = false;
+          for (let k = 0; k < NEIGHBOURS.length && !frontier; k++) {
+            const d = NEIGHBOURS[k];
+            const ny = y + d[1];
+            if (ny < 0 || ny >= CHUNK_SY) continue;
+            const ni = localIndex(lx + d[0], ny, lz + d[2]);
+            const nBlock = chunk.blocks[ni];
+            if (this._opacity(nBlock) >= MAX_LIGHT) continue;
+            const nLevel = chunk.light[ni] >> 4 & 15;
+            const reach = k === DOWN && level === MAX_LIGHT ? MAX_LIGHT : level - 1;
+            if (nLevel < reach) frontier = true;
+          }
+          if (frontier) this._skyAdd.push(ox + lx, y, oz + lz);
+        }
+      }
+    }
+    for (let lx = 0; lx < CHUNK_SX; lx++) {
+      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        for (let y = 0; y < CHUNK_SY; y++) {
+          const i = localIndex(lx, y, lz);
+          const emit = blocks_default.light(chunk.blocks[i]);
+          if (emit > 0) {
+            chunk.light[i] = chunk.light[i] & 240 | emit;
+            this._blockAdd.push(ox + lx, y, oz + lz);
+          }
+        }
+      }
+    }
+    this.dirtyChunks.add(chunkKey(chunk.cx, chunk.cz));
+    chunk.lit = true;
+    this.stats.relitChunks++;
+  }
+  /* --------------------------------------------------------------------
+     A chunk becoming resident can unblock light that was waiting at the
+     seam. Re-seed from the borders of all four neighbours so light flows
+     both ways across the new boundary.
+     -------------------------------------------------------------------- */
+  seedFromNeighbours(chunk) {
+    if (!chunk) return;
+    const ox = chunk.cx * CHUNK_SX;
+    const oz = chunk.cz * CHUNK_SZ;
+    this._invalidateMemo();
+    const edge = (wx, wz, ix, iz) => {
+      for (let y = 0; y < CHUNK_SY; y++) {
+        const s = this.getSky(wx, y, wz);
+        if (s > 1 && this.getSky(ix, y, iz) < s - 1) this._skyAdd.push(wx, y, wz);
+        const b = this.getBlockLight(wx, y, wz);
+        if (b > 1 && this.getBlockLight(ix, y, iz) < b - 1) this._blockAdd.push(wx, y, wz);
+      }
+    };
+    for (let lx = 0; lx < CHUNK_SX; lx++) {
+      edge(ox + lx, oz - 1, ox + lx, oz);
+      edge(ox + lx, oz + CHUNK_SZ, ox + lx, oz + CHUNK_SZ - 1);
+    }
+    for (let lz = 0; lz < CHUNK_SZ; lz++) {
+      edge(ox - 1, oz + lz, ox, oz + lz);
+      edge(ox + CHUNK_SX, oz + lz, ox + CHUNK_SX - 1, oz + lz);
+    }
+  }
+  /* --------------------------------------------------------------------
+     Incremental update after a single block change.
+     -------------------------------------------------------------------- */
+  onBlockChanged(wx, wy, wz, oldId, newId) {
+    if (wy < 0 || wy >= CHUNK_SY) return;
+    this._invalidateMemo();
+    const oldEmit = blocks_default.light(oldId);
+    const newEmit = blocks_default.light(newId);
+    const oldOp = this._opacity(oldId);
+    const newOp = this._opacity(newId);
+    if (oldEmit > 0) {
+      this._blockRemove.push(wx, wy, wz, oldEmit);
+      this.setBlockLight(wx, wy, wz, 0);
+    }
+    if (newOp >= MAX_LIGHT && oldOp < MAX_LIGHT) {
+      const had = this.getBlockLight(wx, wy, wz);
+      if (had > 0) {
+        this._blockRemove.push(wx, wy, wz, had);
+        this.setBlockLight(wx, wy, wz, 0);
+      }
+    }
+    if (newEmit > 0) {
+      this.setBlockLight(wx, wy, wz, newEmit);
+      this._blockAdd.push(wx, wy, wz);
+    } else if (newOp < MAX_LIGHT) {
+      for (const n of NEIGHBOURS) {
+        const nx = wx + n[0], ny = wy + n[1], nz = wz + n[2];
+        if (this.getBlockLight(nx, ny, nz) > 0) this._blockAdd.push(nx, ny, nz);
+      }
+    }
+    if (newOp >= MAX_LIGHT) {
+      const had = this.getSky(wx, wy, wz);
+      if (had > 0) {
+        this._skyRemove.push(wx, wy, wz, had);
+        this.setSky(wx, wy, wz, 0);
+      }
+      for (let y = wy - 1; y >= 0; y--) {
+        const s = this.getSky(wx, y, wz);
+        if (s <= 0) break;
+        this._skyRemove.push(wx, y, wz, s);
+        this.setSky(wx, y, wz, 0);
+      }
+    } else if (oldOp >= MAX_LIGHT || newOp < oldOp) {
+      const above = this.getSky(wx, wy + 1, wz);
+      if (above >= MAX_LIGHT && newOp === 0) {
+        let y = wy;
+        while (y >= 0 && this._opacity(this.getBlock(wx, y, wz) ?? ID.AIR) === 0) {
+          this.setSky(wx, y, wz, MAX_LIGHT);
+          this._skyAdd.push(wx, y, wz);
+          y--;
+        }
+      }
+      for (const n of NEIGHBOURS) {
+        const nx = wx + n[0], ny = wy + n[1], nz = wz + n[2];
+        if (this.getSky(nx, ny, nz) > 0) this._skyAdd.push(nx, ny, nz);
+      }
+    }
+  }
+  /* --------------------------------------------------------------------
+       Drain the BFS queues. Bounded by `budget` node visits so a big edit
+       can't stall a frame; leftovers continue next call.
+  
+       Removal runs before addition in both channels — the removal pass seeds
+       the addition queue with the surviving border, so running them the other
+       way round would re-flood light that is about to be cleared.
+       Returns the number of nodes processed.
+       -------------------------------------------------------------------- */
+  update(budget = 4e4) {
+    let work = 0;
+    this._invalidateMemo();
+    work += this._drainBlockRemoval(budget - work);
+    work += this._drainBlockAddition(budget - work);
+    work += this._drainSkyRemoval(budget - work);
+    work += this._drainSkyAddition(budget - work);
+    return work;
+  }
+  get pending() {
+    return this._skyAdd.length + this._skyRemove.length + this._blockAdd.length + this._blockRemove.length;
+  }
+  /* ---- blocklight addition ---- */
+  _drainBlockAddition(budget) {
+    let n = 0;
+    const r = this._r3;
+    while (!this._blockAdd.isEmpty && n < budget) {
+      this._blockAdd.shift(r);
+      const [x, y, z] = r;
+      const level = this.getBlockLight(x, y, z);
+      n++;
+      if (level <= 1) continue;
+      for (const d of NEIGHBOURS) {
+        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+        if (ny < 0 || ny >= CHUNK_SY) continue;
+        const id = this.getBlock(nx, ny, nz);
+        if (id === null) continue;
+        const op = this._opacity(id);
+        if (op >= MAX_LIGHT) continue;
+        const target = level - 1 - op;
+        if (target <= 0) continue;
+        if (this.getBlockLight(nx, ny, nz) < target) {
+          this.setBlockLight(nx, ny, nz, target);
+          this._blockAdd.push(nx, ny, nz);
+        }
+      }
+    }
+    this.stats.blockNodes += n;
+    return n;
+  }
+  /* ---- blocklight removal ---- */
+  _drainBlockRemoval(budget) {
+    let n = 0;
+    const r = this._r4;
+    while (!this._blockRemove.isEmpty && n < budget) {
+      this._blockRemove.shift(r);
+      const [x, y, z, old] = r;
+      n++;
+      for (const d of NEIGHBOURS) {
+        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+        if (ny < 0 || ny >= CHUNK_SY) continue;
+        if (this.getBlock(nx, ny, nz) === null) continue;
+        const cur = this.getBlockLight(nx, ny, nz);
+        if (cur === 0) continue;
+        if (cur < old) {
+          this.setBlockLight(nx, ny, nz, 0);
+          this._blockRemove.push(nx, ny, nz, cur);
+        } else {
+          this._blockAdd.push(nx, ny, nz);
+        }
+      }
+    }
+    return n;
+  }
+  /* ---- skylight addition ---- */
+  _drainSkyAddition(budget) {
+    let n = 0;
+    const r = this._r3;
+    while (!this._skyAdd.isEmpty && n < budget) {
+      this._skyAdd.shift(r);
+      const [x, y, z] = r;
+      const level = this.getSky(x, y, z);
+      n++;
+      if (level <= 0) continue;
+      for (let i = 0; i < NEIGHBOURS.length; i++) {
+        const d = NEIGHBOURS[i];
+        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+        if (ny < 0 || ny >= CHUNK_SY) continue;
+        const id = this.getBlock(nx, ny, nz);
+        if (id === null) continue;
+        const op = this._opacity(id);
+        if (op >= MAX_LIGHT) continue;
+        const vertical = i === DOWN && level === MAX_LIGHT && op === 0;
+        const target = vertical ? MAX_LIGHT : level - 1 - op;
+        if (target <= 0) continue;
+        if (this.getSky(nx, ny, nz) < target) {
+          this.setSky(nx, ny, nz, target);
+          this._skyAdd.push(nx, ny, nz);
+        }
+      }
+    }
+    this.stats.skyNodes += n;
+    return n;
+  }
+  /* ---- skylight removal ---- */
+  _drainSkyRemoval(budget) {
+    let n = 0;
+    const r = this._r4;
+    while (!this._skyRemove.isEmpty && n < budget) {
+      this._skyRemove.shift(r);
+      const [x, y, z, old] = r;
+      n++;
+      for (let i = 0; i < NEIGHBOURS.length; i++) {
+        const d = NEIGHBOURS[i];
+        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+        if (ny < 0 || ny >= CHUNK_SY) continue;
+        if (this.getBlock(nx, ny, nz) === null) continue;
+        const cur = this.getSky(nx, ny, nz);
+        if (cur === 0) continue;
+        const inherited = cur < old || i === DOWN && old === MAX_LIGHT && cur === MAX_LIGHT;
+        if (inherited) {
+          this.setSky(nx, ny, nz, 0);
+          this._skyRemove.push(nx, ny, nz, cur);
+        } else {
+          this._skyAdd.push(nx, ny, nz);
+        }
+      }
+    }
+    return n;
+  }
+  /* Hand the accumulated dirty-chunk set to the caller and reset it. */
+  takeDirtyChunks() {
+    if (this.dirtyChunks.size === 0) return null;
+    const out = this.dirtyChunks;
+    this.dirtyChunks = /* @__PURE__ */ new Set();
+    return out;
+  }
+  reset() {
+    this._skyAdd.clear();
+    this._skyRemove.clear();
+    this._blockAdd.clear();
+    this._blockRemove.clear();
+    this.dirtyChunks.clear();
+    this._invalidateMemo();
+  }
+};
+
+// js/render/material.js
+var LIGHT_CURVE_GLSL = (
+  /* glsl */
+  `
+  float lightCurve(float level) {
+    // level is 0..1 (i.e. voxel light 0..15 normalised)
+    float l = clamp(level, 0.0, 1.0);
+    return pow(l, 1.45);
+  }
+`
+);
+var VERT = (
+  /* glsl */
+  `
+  attribute vec3 aColor;
+  attribute vec2 aLight;   // x = skylight 0..1, y = blocklight 0..1
+  attribute float aAO;     // 0..1 ambient-occlusion multiplier
+  attribute float aTexIdx; // atlas tile index (-1 = untextured)
+
+  varying vec3 vColor;
+  varying vec2 vLight;
+  varying float vAO;
+  varying vec2 vUv;
+  varying float vTexIdx;
+  varying vec3 vWorldPos;
+
+  uniform float uTime;
+  uniform float uWaveStrength;  // >0 makes foliage/liquids sway
+
+  #include <fog_pars_vertex>
+
+  void main() {
+    vColor = aColor;
+    vLight = aLight;
+    vAO = aAO;
+    vUv = uv;
+    vTexIdx = aTexIdx;
+
+    vec3 pos = position;
+
+    // Gentle wind sway. Driven per-vertex from world position so neighbouring
+    // plants move out of phase instead of the whole field pulsing together.
+    if (uWaveStrength > 0.0) {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      float phase = wp.x * 0.6 + wp.z * 0.45;
+      // Only the upper vertices of a quad sway, so plants stay rooted.
+      float anchor = fract(position.y) > 0.01 ? 1.0 : 0.0;
+      pos.x += sin(uTime * 1.6 + phase) * 0.045 * uWaveStrength * anchor;
+      pos.z += cos(uTime * 1.3 + phase * 1.1) * 0.035 * uWaveStrength * anchor;
+    }
+
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+    gl_Position = projectionMatrix * mvPosition;
+
+    #include <fog_vertex>
+  }
+`
+);
+var FRAG = (
+  /* glsl */
+  `
+  precision highp float;
+
+  // Under GLSL3 Three aliases attribute/varying/texture2D for us but
+  // deliberately does NOT alias gl_FragColor \u2014 an ES3 shader is expected to
+  // declare its own output. We declare it and restore the alias, because the
+  // stock <fog_fragment> chunk included below still writes to gl_FragColor.
+  layout(location = 0) out highp vec4 pc_fragColor;
+  #define gl_FragColor pc_fragColor
+
+  varying vec3 vColor;
+  varying vec2 vLight;
+  varying float vAO;
+  varying vec2 vUv;
+  varying float vTexIdx;
+  varying vec3 vWorldPos;
+
+  // A texture ARRAY, not an atlas image: each block texture owns a layer, so
+  // mip filtering can never blend one block's texels into another's. vTexIdx
+  // selects the layer. See render/atlas.js.
+  uniform sampler2DArray uAtlas;
+  uniform float uHasAtlas;
+  uniform vec3 uSkyTint;      // colour sunlight contributes (warm at dusk)
+  uniform vec3 uBlockTint;    // colour torches contribute (fixed warm orange)
+  uniform float uDaylight;    // 0 = midnight, 1 = noon
+  uniform float uAmbient;     // floor so caves are dark but not unreadable
+  uniform float uOpacity;
+  uniform float uAlphaTest;
+
+  ${LIGHT_CURVE_GLSL}
+
+  #include <fog_pars_fragment>
+
+  void main() {
+    vec4 base = vec4(vColor, 1.0);
+
+    if (uHasAtlas > 0.5 && vTexIdx >= 0.0) {
+      vec4 tex = texture(uAtlas, vec3(vUv, vTexIdx));
+      if (tex.a < uAlphaTest) discard;
+      // Tint the texture by the vertex colour. Grey-ish textures come through
+      // as-is; grass/foliage carry a biome tint in vColor.
+      base = vec4(tex.rgb * vColor, tex.a);
+    }
+
+    // --- combine the two light channels -----------------------------------
+    float sky = lightCurve(vLight.x) * uDaylight;
+    float blk = lightCurve(vLight.y);
+
+    vec3 skyContrib = uSkyTint * sky;
+    vec3 blkContrib = uBlockTint * blk;
+
+    // Take the stronger channel and add a fraction of the weaker one. A plain
+    // sum would blow out to white where a torch sits in daylight; a plain max
+    // would make torches invisible outdoors. This keeps both readable.
+    vec3 light = max(skyContrib, blkContrib) + min(skyContrib, blkContrib) * 0.32;
+    light = max(light, vec3(uAmbient));
+
+    vec3 rgb = base.rgb * light * vAO;
+
+    gl_FragColor = vec4(rgb, base.a * uOpacity);
+
+    #include <fog_fragment>
+  }
+`
+);
+function makeFallbackArrayTexture() {
+  const tex = new DataArrayTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, 1);
+  tex.needsUpdate = true;
+  return tex;
+}
+function createSharedUniforms() {
+  return {
+    uAtlas: { value: makeFallbackArrayTexture() },
+    uHasAtlas: { value: 0 },
+    uSkyTint: { value: new Color(1, 1, 1) },
+    uBlockTint: { value: new Color(1, 0.78, 0.52) },
+    uDaylight: { value: 1 },
+    uAmbient: { value: 0.035 },
+    uTime: { value: 0 }
+  };
+}
+function createVoxelMaterials(shared) {
+  const mk = (extra, uniformOverrides) => {
+    const uniforms = UniformsUtils.merge([
+      UniformsLib.fog,
+      {
+        uOpacity: { value: 1 },
+        uAlphaTest: { value: 0.5 },
+        uWaveStrength: { value: 0 }
+      }
+    ]);
+    Object.assign(uniforms, shared);
+    Object.assign(uniforms, uniformOverrides || {});
+    const m = new ShaderMaterial(Object.assign({
+      uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      fog: true,
+      // GLSL3 is required for sampler2DArray. Three's ES3 prefix aliases
+      // attribute/varying/gl_FragColor/texture2D, so the shader source above
+      // still reads like conventional GLSL1.
+      glslVersion: GLSL3
+    }, extra));
+    return m;
+  };
+  const opaque = mk({ name: "voxel-opaque" });
+  const water = mk({
+    name: "voxel-water",
+    transparent: true,
+    depthWrite: false,
+    // don't occlude other transparent surfaces
+    side: FrontSide
+  }, {
+    uOpacity: { value: 0.78 },
+    uWaveStrength: { value: 0.35 }
+  });
+  const foliage = mk({
+    name: "voxel-foliage",
+    side: DoubleSide,
+    transparent: false,
+    alphaTest: 0.5
+  }, {
+    uWaveStrength: { value: 1 }
+  });
+  return { opaque, water, foliage };
+}
+function updateVoxelUniforms(shared, skyState) {
+  if (!shared) return;
+  const d = Math.max(0, Math.min(1, skyState.daylight));
+  shared.uDaylight.value = d;
+  if (skyState.skyTint) {
+    shared.uSkyTint.value.setRGB(skyState.skyTint[0], skyState.skyTint[1], skyState.skyTint[2]);
+  }
+  if (typeof skyState.time === "number") shared.uTime.value = skyState.time;
+  shared.uAmbient.value = 0.028 + 0.012 * d;
+}
+
+// js/world/meshPool.js
+var PAD = 1;
+var PSX = CHUNK_SX + PAD * 2;
+var PSZ = CHUNK_SZ + PAD * 2;
+var PADDED_LEN = PSX * PSZ * CHUNK_SY;
+var padIndex = (px2, y, pz2) => (px2 * PSZ + pz2) * CHUNK_SY + y;
+function defaultWorkerCount() {
+  const cores = typeof navigator !== "undefined" && navigator.hardwareConcurrency || 4;
+  return Math.max(1, Math.min(4, cores - 1));
+}
+var MeshPool = class {
+  constructor(world) {
+    this.world = world;
+    this.workers = [];
+    this.idle = [];
+    this.enabled = false;
+    this.queue = /* @__PURE__ */ new Map();
+    this.inFlight = /* @__PURE__ */ new Map();
+    this._jobId = 1;
+    this.generation = 0;
+    this._scratch = [];
+    this.stats = { queued: 0, meshed: 0, dropped: 0, fallback: 0 };
+  }
+  init() {
+    if (typeof Worker === "undefined" || typeof URL === "undefined") return this;
+    try {
+      const count = defaultWorkerCount();
+      for (let i = 0; i < count; i++) {
+        const w = new Worker(new URL("./mesher.worker.js", import.meta.url), { type: "module" });
+        w.onmessage = (e) => this._onWorkerMessage(w, e.data);
+        w.onerror = (err) => {
+          console.warn("mesh worker failed, falling back to synchronous meshing", err.message);
+          this.shutdown();
+        };
+        this.workers.push(w);
+        this.idle.push(w);
+      }
+      this.enabled = this.workers.length > 0;
+    } catch (err) {
+      console.warn("mesh workers unavailable, meshing on the main thread", err);
+      this.enabled = false;
+    }
+    return this;
+  }
+  /* Tell every worker about the current texture atlas. Only the face->layer
+     Int32Array crosses over; the GPU texture itself stays on the main thread. */
+  setAtlas(atlas) {
+    this.generation++;
+    const faceLayer = atlas && atlas._faceLayer ? atlas._faceLayer : null;
+    for (const w of this.workers) {
+      w.postMessage({ type: "atlas", faceLayer: faceLayer ? faceLayer.slice() : null });
+    }
+  }
+  reset() {
+    this.generation++;
+    this.queue.clear();
+    this.inFlight.clear();
+  }
+  shutdown() {
+    for (const w of this.workers) {
+      try {
+        w.terminate();
+      } catch (_) {
+      }
+    }
+    this.workers = [];
+    this.idle = [];
+    this.enabled = false;
+  }
+  get pending() {
+    return this.queue.size + this.inFlight.size;
+  }
+  /* Queue a chunk. Returns false when workers are unavailable, so the caller
+     can mesh it synchronously instead. */
+  request(chunk, priority) {
+    if (!this.enabled) return false;
+    const key = chunkKey(chunk.cx, chunk.cz);
+    this.queue.set(key, { chunk, cx: chunk.cx, cz: chunk.cz, priority });
+    this.stats.queued++;
+    this._pump();
+    return true;
+  }
+  /* Called each frame with the player's chunk position so the queue can be
+     re-prioritised as they move. */
+  update(acx, acz) {
+    if (!this.enabled || this.queue.size === 0) return;
+    for (const job of this.queue.values()) {
+      const dx = job.cx - acx, dz = job.cz - acz;
+      job.priority = dx * dx + dz * dz;
+    }
+    this._pump();
+  }
+  _pump() {
+    while (this.idle.length > 0 && this.queue.size > 0) {
+      let bestKey = null, best = Infinity;
+      for (const [key, job2] of this.queue) {
+        if (job2.priority < best) {
+          best = job2.priority;
+          bestKey = key;
+        }
+      }
+      if (bestKey === null) return;
+      const job = this.queue.get(bestKey);
+      this.queue.delete(bestKey);
+      const live = this.world.chunks.get(bestKey);
+      if (!live) {
+        this.stats.dropped++;
+        continue;
+      }
+      const worker = this.idle.pop();
+      this._dispatch(worker, live, bestKey);
+    }
+  }
+  _dispatch(worker, chunk, key) {
+    const jobId = this._jobId++;
+    const { blocks, light } = this._packNeighbourhood(chunk);
+    const settings = this.world.game && this.world.game.state && this.world.game.state.settings || {};
+    this.inFlight.set(jobId, { key, cx: chunk.cx, cz: chunk.cz, generation: this.generation, worker });
+    worker.postMessage({
+      type: "mesh",
+      jobId,
+      cx: chunk.cx,
+      cz: chunk.cz,
+      blocks,
+      light,
+      ao: true,
+      smoothLighting: settings.smoothLighting !== false
+    }, [blocks.buffer, light.buffer]);
+  }
+  /* Build the chunk plus a one-voxel skin of its neighbours — everything the
+     mesher can reach when culling border faces and blending light across the
+     seam. */
+  _packNeighbourhood(chunk) {
+    const blocks = new Uint8Array(PADDED_LEN);
+    const light = new Uint8Array(PADDED_LEN);
+    const world = this.world;
+    const ox = chunk.cx * CHUNK_SX;
+    const oz = chunk.cz * CHUNK_SZ;
+    for (let lx = 0; lx < CHUNK_SX; lx++) {
+      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        const src = (lx * CHUNK_SZ + lz) * CHUNK_SY;
+        const dst = padIndex(lx + PAD, 0, lz + PAD);
+        blocks.set(chunk.blocks.subarray(src, src + CHUNK_SY), dst);
+        light.set(chunk.light.subarray(src, src + CHUNK_SY), dst);
+      }
+    }
+    const edge = (px2, pz2) => {
+      const wx = ox + px2 - PAD;
+      const wz = oz + pz2 - PAD;
+      for (let y = 0; y < CHUNK_SY; y++) {
+        blocks[padIndex(px2, y, pz2)] = world.getBlock(wx, y, wz);
+        light[padIndex(px2, y, pz2)] = world.getLightByte(wx, y, wz);
+      }
+    };
+    for (let px2 = 0; px2 < PSX; px2++) {
+      edge(px2, 0);
+      edge(px2, PSZ - 1);
+    }
+    for (let pz2 = 1; pz2 < PSZ - 1; pz2++) {
+      edge(0, pz2);
+      edge(PSX - 1, pz2);
+    }
+    return { blocks, light };
+  }
+  _onWorkerMessage(worker, msg) {
+    const job = this.inFlight.get(msg.jobId);
+    this.inFlight.delete(msg.jobId);
+    this.idle.push(worker);
+    if (msg.type === "error") {
+      console.warn(`mesh worker error for chunk ${msg.cx},${msg.cz}: ${msg.message}`);
+      this._pump();
+      return;
+    }
+    if (!job) {
+      this._pump();
+      return;
+    }
+    if (job.generation !== this.generation) {
+      this.stats.dropped++;
+      this._pump();
+      return;
+    }
+    const chunk = this.world.chunks.get(job.key);
+    if (!chunk) {
+      this.stats.dropped++;
+      this._pump();
+      return;
+    }
+    this.stats.meshed++;
+    this.world._uploadChunkGeometry(chunk, msg);
+    this._pump();
+  }
+};
 
 // js/world/world.js
 var World = class {
@@ -33796,6 +34956,10 @@ var World = class {
     this.matOpaque = null;
     this.matWater = null;
     this.matCross = null;
+    this.uniforms = null;
+    this.lighting = new LightEngine(this);
+    this.atlas = null;
+    this.meshPool = new MeshPool(this);
     this._anchorCX = 0;
     this._anchorCZ = 0;
     this._primed = false;
@@ -33804,21 +34968,27 @@ var World = class {
   }
   /* ---- lifecycle -------------------------------------------------------- */
   init() {
-    const T = this.THREE;
-    this.matOpaque = new T.MeshLambertMaterial({ vertexColors: true });
-    this.matWater = new T.MeshLambertMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false
-    });
-    this.matCross = new T.MeshLambertMaterial({
-      vertexColors: true,
-      side: T.DoubleSide,
-      alphaTest: 0.1,
-      transparent: false
-    });
+    this.uniforms = createSharedUniforms();
+    const mats = createVoxelMaterials(this.uniforms);
+    this.matOpaque = mats.opaque;
+    this.matWater = mats.water;
+    this.matCross = mats.foliage;
+    this.meshPool.init();
     return this;
+  }
+  /* Bind a texture atlas (procedural default or a loaded resource pack) and
+     re-mesh everything so faces pick up their UVs. */
+  setAtlas(atlas) {
+    this.atlas = atlas || null;
+    if (this.uniforms) {
+      this.uniforms.uAtlas.value = atlas ? atlas.texture : null;
+      this.uniforms.uHasAtlas.value = atlas ? 1 : 0;
+    }
+    this.meshPool.setAtlas(this.atlas);
+    for (const [key, chunk] of this.chunks) {
+      chunk.dirty = true;
+      this.remeshQueue.add(key);
+    }
   }
   reset(seed) {
     for (const key of [...this.meshes.keys()]) this._disposeMeshSet(key);
@@ -33826,6 +34996,8 @@ var World = class {
     this.chunks.clear();
     this.edits.clear();
     this.remeshQueue.clear();
+    this.lighting.reset();
+    this.meshPool.reset();
     this.seed = seed | 0;
     this._primed = false;
     this._readyEmitted = false;
@@ -33863,6 +35035,8 @@ var World = class {
     }
     chunk.generated = true;
     this._applyEditsInChunk(chunk);
+    this.lighting.lightChunk(chunk);
+    this.lighting.seedFromNeighbours(chunk);
     chunk.dirty = true;
     return chunk;
   }
@@ -33897,6 +35071,26 @@ var World = class {
     const lz = wz - cz * CHUNK_SZ;
     return chunk.getLocal(lx, wy, lz);
   }
+  /* Packed light byte (sky << 4 | block) at a world voxel. Unlike getBlock
+     this does NOT generate missing chunks: meshing calls it for every border
+     face, and generating a neighbour mid-mesh would recurse. An absent
+     neighbour reads as dark, and the chunk is re-meshed once it loads. */
+  getLightByte(wx, wy, wz) {
+    if (wy >= CHUNK_SY) return 240;
+    if (wy < 0) return 0;
+    const cx = Math.floor(wx / CHUNK_SX);
+    const cz = Math.floor(wz / CHUNK_SZ);
+    const chunk = this.chunks.get(chunkKey(cx, cz));
+    if (!chunk) return 0;
+    return chunk.getLightByte(wx - cx * CHUNK_SX, wy, wz - cz * CHUNK_SZ);
+  }
+  // Convenience readers used by entities/UI (e.g. mob spawn checks).
+  getSkyLight(wx, wy, wz) {
+    return this.getLightByte(wx, wy, wz) >> 4 & 15;
+  }
+  getBlockLightAt(wx, wy, wz) {
+    return this.getLightByte(wx, wy, wz) & 15;
+  }
   setBlock(wx, wy, wz, id, opts = {}) {
     wx |= 0;
     wy |= 0;
@@ -33910,8 +35104,14 @@ var World = class {
     const lz = wz - cz * CHUNK_SZ;
     const prev = chunk.getLocal(lx, wy, lz);
     if (prev === id) return false;
+    const net = this.game && this.game.net;
+    if (net && net.connected && opts.cause !== "network") {
+      const cause = id === ID.AIR ? 1 : 0;
+      net.sendBlockEdit(wx, wy, wz, id, prev, cause);
+    }
     chunk.setLocal(lx, wy, lz, id);
     this.edits.set(voxelKey(wx, wy, wz), id);
+    this.lighting.onBlockChanged(wx, wy, wz, prev, id);
     chunk.dirty = true;
     this._queueRemesh(cx, cz);
     const onWestX = lx === 0, onEastX = lx === CHUNK_SX - 1;
@@ -34058,6 +35258,10 @@ var World = class {
     const acz = Math.floor(anchor.z / CHUNK_SZ);
     this._anchorCX = acx;
     this._anchorCZ = acz;
+    const sky = this.game && this.game.sky;
+    if (sky && this.uniforms && typeof sky.getTerrainLight === "function") {
+      updateVoxelUniforms(this.uniforms, sky.getTerrainLight());
+    }
     let needed = 0;
     let ready = 0;
     for (let dz = -rd; dz <= rd; dz++) {
@@ -34086,7 +35290,19 @@ var World = class {
         this._unloadChunk(key);
       }
     }
+    if (this.lighting.pending > 0) this.lighting.update(24e3);
+    const litDirty = this.lighting.takeDirtyChunks();
+    if (litDirty) {
+      for (const key of litDirty) {
+        const c = this.chunks.get(key);
+        if (c) {
+          c.dirty = true;
+          this.remeshQueue.add(key);
+        }
+      }
+    }
     this._processRemeshQueue(acx, acz, 3);
+    this.meshPool.update(acx, acz);
     const events = this.game && this.game.events;
     if (!this._primed) {
       const value = needed > 0 ? clamp2(ready / needed, 0, 1) : 1;
@@ -34120,17 +35336,26 @@ var World = class {
       const db = (B.cx - acx) * (B.cx - acx) + (B.cz - acz) * (B.cz - acz);
       return da - db;
     });
+    const usingWorkers = this.meshPool.enabled;
+    const effectiveBudget = usingWorkers ? budget * 8 : budget;
     let built = 0;
-    for (let i = 0; i < keys.length && built < budget; i++) {
+    for (let i = 0; i < keys.length && built < effectiveBudget; i++) {
       const key = keys[i];
-      this.remeshQueue.delete(key);
       const chunk = this.chunks.get(key);
-      if (!chunk) continue;
-      this._buildChunkMesh(chunk);
+      if (!chunk) {
+        this.remeshQueue.delete(key);
+        continue;
+      }
+      if (usingWorkers) {
+        if (this.meshPool.inFlight.size >= this.meshPool.workers.length * 2) break;
+        const dx = chunk.cx - acx, dz = chunk.cz - acz;
+        this.meshPool.request(chunk, dx * dx + dz * dz);
+      } else {
+        this._buildChunkMesh(chunk);
+      }
+      this.remeshQueue.delete(key);
       chunk.dirty = false;
       built++;
-      const events = this.game && this.game.events;
-      if (events) events.emit("chunk:meshed", { cx: chunk.cx, cz: chunk.cz });
     }
   }
   // (Re)build the three buckets of geometry for one chunk and swap the meshes,
@@ -34140,10 +35365,15 @@ var World = class {
     const scene = this.game && this.game.scene;
     const key = chunkKey(chunk.cx, chunk.cz);
     const getBlock = (wx, wy, wz) => this.getBlock(wx, wy, wz);
+    const getLight = (wx, wy, wz) => this.getLightByte(wx, wy, wz);
+    const settings = this.game && this.game.state && this.game.state.settings || {};
     let data;
     try {
       data = meshChunk(chunk, getBlock, {
         ao: true,
+        smoothLighting: settings.smoothLighting !== false,
+        atlas: this.atlas,
+        getLight,
         worldOffset: { x: chunk.cx * CHUNK_SX, z: chunk.cz * CHUNK_SZ }
       });
     } catch (err) {
@@ -34151,12 +35381,22 @@ var World = class {
       return;
     }
     if (!data) return;
+    this._uploadChunkGeometry(chunk, data);
+  }
+  /* Turn meshed buckets into GPU geometry. Split out from _buildChunkMesh so
+     the worker path — which produces the same bucket shape, already as typed
+     arrays — reuses it verbatim. */
+  _uploadChunkGeometry(chunk, data) {
+    const scene = this.game && this.game.scene;
+    const key = chunkKey(chunk.cx, chunk.cz);
     const existing = this.meshes.get(key) || { opaque: null, water: null, cross: null };
     const next = { opaque: null, water: null, cross: null };
     next.opaque = this._swapBucket(existing.opaque, data.opaque, this.matOpaque, chunk, scene, "opaque");
     next.water = this._swapBucket(existing.water, data.water, this.matWater, chunk, scene, "water");
     next.cross = this._swapBucket(existing.cross, data.cross, this.matCross, chunk, scene, "cross");
     this.meshes.set(key, next);
+    const events = this.game && this.game.events;
+    if (events) events.emit("chunk:meshed", { cx: chunk.cx, cz: chunk.cz });
   }
   // Build/replace a single bucket mesh from plain mesher arrays. Returns the
   // new mesh (or null if the bucket is empty). Disposes the old geometry.
@@ -34170,11 +35410,17 @@ var World = class {
       }
       return null;
     }
+    const f32 = (a) => a instanceof Float32Array ? a : new Float32Array(a);
+    const u32 = (a) => a instanceof Uint32Array ? a : new Uint32Array(a);
     const geom = new T.BufferGeometry();
-    geom.setAttribute("position", new T.BufferAttribute(new Float32Array(bucket.positions), 3));
-    geom.setAttribute("normal", new T.BufferAttribute(new Float32Array(bucket.normals), 3));
-    geom.setAttribute("color", new T.BufferAttribute(new Float32Array(bucket.colors), 3));
-    geom.setIndex(new T.BufferAttribute(new Uint32Array(bucket.indices), 1));
+    geom.setAttribute("position", new T.BufferAttribute(f32(bucket.positions), 3));
+    geom.setAttribute("normal", new T.BufferAttribute(f32(bucket.normals), 3));
+    geom.setAttribute("aColor", new T.BufferAttribute(f32(bucket.colors), 3));
+    geom.setAttribute("aLight", new T.BufferAttribute(f32(bucket.light), 2));
+    geom.setAttribute("aAO", new T.BufferAttribute(f32(bucket.ao), 1));
+    geom.setAttribute("uv", new T.BufferAttribute(f32(bucket.uv), 2));
+    geom.setAttribute("aTexIdx", new T.BufferAttribute(f32(bucket.texIdx), 1));
+    geom.setIndex(new T.BufferAttribute(u32(bucket.indices), 1));
     geom.computeBoundingSphere();
     if (oldMesh) {
       if (oldMesh.geometry) oldMesh.geometry.dispose();
@@ -34437,15 +35683,22 @@ var Player = class {
     const sens = (settings.mouseSensitivity != null ? settings.mouseSensitivity : 1) * LOOK_BASE;
     let dx = 0, dy = 0;
     if (input.locked) {
-      dx = input.mouseDX || 0;
-      dy = input.mouseDY || 0;
+      const d = input.lookDelta(settings.lookSmoothing);
+      dx = d.dx;
+      dy = d.dy;
     } else if (input.touch && input.touch.active) {
       dx = input.touch.mx || 0;
       dy = input.touch.my || 0;
     }
-    this.yaw -= dx * sens;
     const invert = settings.invertY ? -1 : 1;
+    this.yaw -= dx * sens;
     this.pitch += dy * sens * invert;
+    if (input.gamepad && input.gamepad.connected) {
+      const speed = settings.gamepadLookSpeed != null ? settings.gamepadLookSpeed : 2.6;
+      const dt = this.game.dt || 0.016;
+      this.yaw -= input.gamepad.lookX * speed * dt;
+      this.pitch += input.gamepad.lookZ * speed * dt * invert;
+    }
     this.pitch = clamp2(this.pitch, -PITCH_LIMIT, PITCH_LIMIT);
     if (this.yaw > Math.PI) this.yaw -= Math.PI * 2;
     else if (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
@@ -38311,6 +39564,1840 @@ var AudioSystem = class {
   }
 };
 
+// js/render/atlas.js
+var BLOCK_TEXTURES = {
+  stone: "stone",
+  dirt: "dirt",
+  grass: { top: "grass_top", side: "grass_side", bottom: "dirt" },
+  sand: "sand",
+  water: "water",
+  log: { top: "log_top", side: "log_side", bottom: "log_top" },
+  leaves: "leaves",
+  planks: "planks",
+  cobblestone: "cobblestone",
+  bedrock: "bedrock",
+  gravel: "gravel",
+  snow: { top: "snow", side: "snow_side", bottom: "dirt" },
+  ice: "ice",
+  coal_ore: "coal_ore",
+  iron_ore: "iron_ore",
+  gold_ore: "gold_ore",
+  diamond_ore: "diamond_ore",
+  glass: "glass",
+  glowstone: "glowstone",
+  cactus: { top: "cactus_top", side: "cactus_side", bottom: "cactus_top" },
+  pumpkin: { top: "pumpkin_top", side: "pumpkin_side", bottom: "pumpkin_top" },
+  crafting_table: { top: "crafting_table_top", side: "crafting_table_side", bottom: "planks" },
+  furnace: { top: "furnace_top", side: "furnace_side", bottom: "furnace_top" },
+  bricks: "bricks",
+  mossy_cobble: "mossy_cobble",
+  clay: "clay",
+  sandstone: { top: "sandstone_top", side: "sandstone_side", bottom: "sandstone_top" },
+  birch_log: { top: "birch_log_top", side: "birch_log_side", bottom: "birch_log_top" },
+  birch_leaves: "birch_leaves",
+  pine_log: { top: "log_top", side: "pine_log_side", bottom: "log_top" },
+  pine_leaves: "pine_leaves",
+  flower_red: "flower_red",
+  flower_yellow: "flower_yellow",
+  tall_grass: "tall_grass",
+  mushroom_red: "mushroom_red",
+  torch: "torch",
+  obsidian: "obsidian",
+  emerald_ore: "emerald_ore",
+  redstone_ore: "redstone_ore",
+  lantern: "lantern"
+};
+var FACE_SLOT = ["side", "side", "top", "bottom", "side", "side"];
+var TextureAtlas = class _TextureAtlas {
+  constructor(tileSize = 16) {
+    this.tileSize = tileSize;
+    this.texture = null;
+    this.names = [];
+    this.indexByName = /* @__PURE__ */ new Map();
+    this.animations = /* @__PURE__ */ new Map();
+    this._faceLayer = null;
+    this._tile = { index: -1, u0: 0, v0: 0, u1: 1, v1: 1 };
+  }
+  get layerCount() {
+    return this.names.length;
+  }
+  /**
+   * Build from a map of { textureName: source }, where source is anything
+   * canvas drawImage accepts (HTMLImageElement, ImageBitmap, canvas), or
+   * { image, frames } for an animated texture.
+   */
+  static build(sources, opts = {}) {
+    const tileSize = opts.tileSize || 16;
+    const atlas = new _TextureAtlas(tileSize);
+    const entries = [];
+    for (const [name, src] of Object.entries(sources)) {
+      const frames = src && src.frames || 1;
+      entries.push({ name, src: src && src.image || src, frames, meta: src && src.meta });
+    }
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    let totalLayers = 0;
+    for (const e of entries) totalLayers += e.frames;
+    const size = tileSize * tileSize * 4;
+    const data = new Uint8Array(size * totalLayers);
+    const canvas = makeCanvas(tileSize, tileSize);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = false;
+    let layer = 0;
+    for (const e of entries) {
+      const first = layer;
+      const srcW = e.src.width || tileSize;
+      const srcH = e.src.height || tileSize;
+      const frameH = srcH / e.frames;
+      for (let f = 0; f < e.frames; f++) {
+        ctx.clearRect(0, 0, tileSize, tileSize);
+        try {
+          ctx.drawImage(e.src, 0, f * frameH, srcW, frameH, 0, 0, tileSize, tileSize);
+        } catch (err) {
+          console.warn(`atlas: could not draw texture "${e.name}"`, err);
+        }
+        const img = ctx.getImageData(0, 0, tileSize, tileSize);
+        data.set(img.data, size * layer);
+        layer++;
+      }
+      atlas.names[first] = e.name;
+      atlas.indexByName.set(e.name, first);
+      for (let f = 1; f < e.frames; f++) atlas.names[first + f] = `${e.name}#${f}`;
+      if (e.frames > 1) {
+        const frameTime = (e.meta && e.meta.frametime ? e.meta.frametime : 2) / 20;
+        atlas.animations.set(e.name, {
+          base: first,
+          frames: e.frames,
+          frameTime,
+          time: 0,
+          current: 0
+        });
+      }
+    }
+    const tex = new DataArrayTexture(data, tileSize, tileSize, totalLayers);
+    tex.format = RGBAFormat;
+    tex.type = UnsignedByteType;
+    tex.magFilter = NearestFilter;
+    tex.minFilter = NearestMipmapLinearFilter;
+    tex.wrapS = RepeatWrapping;
+    tex.wrapT = RepeatWrapping;
+    tex.generateMipmaps = true;
+    tex.colorSpace = SRGBColorSpace;
+    tex.needsUpdate = true;
+    atlas.texture = tex;
+    atlas._buildFaceTable();
+    return atlas;
+  }
+  /* Precompute blockId*6+face -> layer so the mesher never does string work. */
+  _buildFaceTable() {
+    const count = blocks_default.count;
+    this._faceLayer = new Int32Array(count * 6).fill(-1);
+    for (const def2 of blocks_default.all()) {
+      if (!def2 || def2.id === ID.AIR) continue;
+      const spec = BLOCK_TEXTURES[def2.key];
+      if (!spec) continue;
+      for (let f = 0; f < 6; f++) {
+        let name;
+        if (typeof spec === "string") name = spec;
+        else name = spec[FACE_SLOT[f]] || spec.side || spec.top;
+        if (!name) continue;
+        const idx = this.indexByName.get(name);
+        if (idx !== void 0) this._faceLayer[def2.id * 6 + f] = idx;
+      }
+    }
+  }
+  /**
+   * Layer + UV rect for one block face. UVs are the full 0..1 tile because
+   * every texture owns its own array layer.
+   * Returns null when the block has no texture (mesher falls back to colour).
+   */
+  tileFor(blockId, face) {
+    if (!this._faceLayer) return null;
+    const idx = this._faceLayer[blockId * 6 + face];
+    if (idx < 0) return null;
+    const t = this._tile;
+    t.index = idx;
+    t.u0 = 0;
+    t.v0 = 0;
+    t.u1 = 1;
+    t.v1 = 1;
+    return t;
+  }
+  /* Advance animated textures. Rewrites the face table's layer index rather
+     than uploading pixels, so an animated water surface costs one integer
+     write per frame regardless of how much water is on screen. */
+  update(dt) {
+    if (this.animations.size === 0) return false;
+    let changed = false;
+    for (const [name, anim] of this.animations) {
+      anim.time += dt;
+      if (anim.time < anim.frameTime) continue;
+      const advance = Math.floor(anim.time / anim.frameTime);
+      anim.time -= advance * anim.frameTime;
+      const next = (anim.current + advance) % anim.frames;
+      if (next === anim.current) continue;
+      anim.current = next;
+      this.indexByName.set(name, anim.base + next);
+      changed = true;
+    }
+    if (changed) this._buildFaceTable();
+    return changed;
+  }
+  dispose() {
+    if (this.texture) this.texture.dispose();
+    this.texture = null;
+  }
+};
+function makeCanvas(w, h) {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  return c;
+}
+var atlas_default = TextureAtlas;
+
+// js/render/textures.js
+function rngFor(seedStr) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    h ^= seedStr.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  let a = h;
+  return function() {
+    a |= 0;
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function baseColor(key, fallback = [128, 128, 128]) {
+  const d = blocks_default.byKey(key);
+  if (!d || !d.color) return fallback;
+  return [
+    Math.round(d.color[0] * 255),
+    Math.round(d.color[1] * 255),
+    Math.round(d.color[2] * 255)
+  ];
+}
+var clamp255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+var Tile = class {
+  constructor(size, seed) {
+    this.size = size;
+    this.data = new Uint8ClampedArray(size * size * 4);
+    this.rand = rngFor(seed);
+  }
+  set(x, y, r, g, b, a = 255) {
+    if (x < 0 || y < 0 || x >= this.size || y >= this.size) return;
+    const i = (y * this.size + x) * 4;
+    this.data[i] = clamp255(r);
+    this.data[i + 1] = clamp255(g);
+    this.data[i + 2] = clamp255(b);
+    this.data[i + 3] = clamp255(a);
+  }
+  get(x, y) {
+    const i = (y * this.size + x) * 4;
+    return [this.data[i], this.data[i + 1], this.data[i + 2], this.data[i + 3]];
+  }
+  fill(r, g, b, a = 255) {
+    for (let y = 0; y < this.size; y++) for (let x = 0; x < this.size; x++) this.set(x, y, r, g, b, a);
+  }
+  /* Per-pixel brightness jitter — the workhorse that turns a flat colour into
+     something that reads as a material at block scale. */
+  mottle(rgb2, amount, alpha = 255) {
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const d = (this.rand() - 0.5) * 2 * amount;
+        this.set(x, y, rgb2[0] + rgb2[0] * d, rgb2[1] + rgb2[1] * d, rgb2[2] + rgb2[2] * d, alpha);
+      }
+    }
+  }
+  /* Scattered darker/lighter clumps, used for gravel, ore matrix, dirt. */
+  speckle(count, rgb2, spread, sizeRange = [1, 2]) {
+    for (let i = 0; i < count; i++) {
+      const cx = this.rand() * this.size | 0;
+      const cy = this.rand() * this.size | 0;
+      const r = sizeRange[0] + (this.rand() * (sizeRange[1] - sizeRange[0] + 1) | 0);
+      const d = (this.rand() - 0.5) * 2 * spread;
+      for (let y = cy; y < cy + r; y++) {
+        for (let x = cx; x < cx + r; x++) {
+          const px2 = (x % this.size + this.size) % this.size;
+          const py2 = (y % this.size + this.size) % this.size;
+          this.set(px2, py2, rgb2[0] * (1 + d), rgb2[1] * (1 + d), rgb2[2] * (1 + d));
+        }
+      }
+    }
+  }
+  /* Horizontal band, used for grass overhang and snow edges. */
+  band(y0, y1, rgb2, jitter = 0.1) {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const d = (this.rand() - 0.5) * 2 * jitter;
+        this.set(x, y, rgb2[0] * (1 + d), rgb2[1] * (1 + d), rgb2[2] * (1 + d));
+      }
+    }
+  }
+  outline(rgb2, alpha = 255) {
+    const s = this.size;
+    for (let i = 0; i < s; i++) {
+      this.set(i, 0, rgb2[0], rgb2[1], rgb2[2], alpha);
+      this.set(i, s - 1, rgb2[0], rgb2[1], rgb2[2], alpha);
+      this.set(0, i, rgb2[0], rgb2[1], rgb2[2], alpha);
+      this.set(s - 1, i, rgb2[0], rgb2[1], rgb2[2], alpha);
+    }
+  }
+  toCanvas() {
+    const c = makeCanvas(this.size, this.size);
+    const ctx = c.getContext("2d");
+    const img = ctx.createImageData(this.size, this.size);
+    img.data.set(this.data);
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+};
+var RECIPES = {
+  stone: (t) => {
+    t.mottle(baseColor("stone"), 0.1);
+    t.speckle(10, baseColor("stone"), 0.14);
+  },
+  cobblestone: (t) => {
+    const c = baseColor("cobblestone");
+    t.mottle(c, 0.06);
+    const s = t.size, cell = Math.max(3, s / 4 | 0);
+    for (let by = 0; by < s; by += cell) {
+      for (let bx = 0; bx < s; bx += cell) {
+        const off = (by / cell | 0) % 2 ? cell / 2 | 0 : 0;
+        const x0 = bx + off, y0 = by;
+        const d = (t.rand() - 0.5) * 0.3;
+        for (let y = y0 + 1; y < y0 + cell - 1; y++) {
+          for (let x = x0 + 1; x < x0 + cell - 1; x++) {
+            t.set(x % s, y % s, c[0] * (1 + d), c[1] * (1 + d), c[2] * (1 + d));
+          }
+        }
+      }
+    }
+  },
+  mossy_cobble: (t) => {
+    RECIPES.cobblestone(t);
+    const moss = [78, 116, 54];
+    const s = t.size;
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) {
+        const clump = Math.sin(x * 1.1) * Math.cos(y * 0.9) + t.rand() * 0.8;
+        if (clump < 0.15) continue;
+        const p = t.get(x, y);
+        const d = (t.rand() - 0.5) * 0.3;
+        t.set(
+          x,
+          y,
+          p[0] * 0.35 + moss[0] * 0.75 * (1 + d),
+          p[1] * 0.35 + moss[1] * 0.85 * (1 + d),
+          p[2] * 0.35 + moss[2] * 0.75 * (1 + d)
+        );
+      }
+    }
+  },
+  dirt: (t) => {
+    t.mottle(baseColor("dirt"), 0.16);
+    t.speckle(14, baseColor("dirt"), 0.3);
+  },
+  grass_top: (t) => {
+    const g = baseColor("grass");
+    const top = blocks_default.byKey("grass") && blocks_default.byKey("grass").top;
+    const c = top ? [top[0] * 255, top[1] * 255, top[2] * 255] : g;
+    t.mottle(c, 0.17);
+    t.speckle(12, c, 0.22, [1, 1]);
+  },
+  grass_side: (t) => {
+    const s = t.size;
+    RECIPES.dirt(t);
+    const top = blocks_default.byKey("grass") && blocks_default.byKey("grass").top;
+    const green = top ? [top[0] * 255, top[1] * 255, top[2] * 255] : [106, 170, 80];
+    const lip = Math.max(2, s * 0.22 | 0);
+    for (let x = 0; x < s; x++) {
+      const drop = lip + (t.rand() * 3 | 0);
+      for (let y = 0; y < drop; y++) {
+        const d = (t.rand() - 0.5) * 0.24;
+        t.set(x, y, green[0] * (1 + d), green[1] * (1 + d), green[2] * (1 + d));
+      }
+    }
+  },
+  sand: (t) => {
+    t.mottle(baseColor("sand"), 0.09);
+    t.speckle(18, baseColor("sand"), 0.12, [1, 1]);
+  },
+  gravel: (t) => {
+    t.mottle(baseColor("gravel"), 0.14);
+    t.speckle(22, baseColor("gravel"), 0.34, [1, 3]);
+  },
+  clay: (t) => t.mottle(baseColor("clay"), 0.08),
+  bedrock: (t) => {
+    t.mottle([60, 60, 64], 0.35);
+    t.speckle(20, [45, 45, 50], 0.5, [1, 3]);
+  },
+  obsidian: (t) => {
+    t.mottle(baseColor("obsidian", [24, 16, 38]), 0.28);
+    t.speckle(6, [70, 50, 110], 0.4, [1, 2]);
+  },
+  snow: (t) => t.mottle([245, 248, 252], 0.05),
+  snow_side: (t) => {
+    RECIPES.dirt(t);
+    t.band(0, Math.max(2, t.size * 0.28 | 0), [245, 248, 252], 0.05);
+  },
+  ice: (t) => {
+    t.mottle(baseColor("ice"), 0.09, 200);
+    const s = t.size;
+    for (let i = 0; i < 3; i++) {
+      let x = t.rand() * s | 0;
+      for (let y = 0; y < s; y++) {
+        t.set(x, y, 235, 245, 255, 210);
+        x += (t.rand() * 3 | 0) - 1;
+      }
+    }
+  },
+  water: (t) => {
+    const c = baseColor("water");
+    t.mottle(c, 0.07, 255);
+    const s = t.size;
+    for (let y = 0; y < s; y++) {
+      const w = Math.sin(y / s * Math.PI * 3) * 0.08;
+      for (let x = 0; x < s; x++) {
+        const p = t.get(x, y);
+        t.set(x, y, p[0] * (1 + w), p[1] * (1 + w), p[2] * (1 + w), 255);
+      }
+    }
+  },
+  log_side: (t) => makeBark(t, baseColor("log", [104, 78, 48])),
+  birch_log_side: (t) => makeBark(t, [216, 214, 206], [90, 90, 84]),
+  pine_log_side: (t) => makeBark(t, [86, 62, 42]),
+  log_top: (t) => makeRings(t, baseColor("log", [104, 78, 48])),
+  birch_log_top: (t) => makeRings(t, [216, 214, 206]),
+  planks: (t) => {
+    const c = baseColor("planks", [162, 130, 78]);
+    t.mottle(c, 0.08);
+    const s = t.size, rows = 4, h = s / rows;
+    for (let r = 0; r < rows; r++) {
+      const y = Math.round(r * h);
+      for (let x = 0; x < s; x++) t.set(x, y, c[0] * 0.62, c[1] * 0.62, c[2] * 0.62);
+      const kx = (r * 5 + 2) % s;
+      t.set(kx, y + 2, c[0] * 0.7, c[1] * 0.7, c[2] * 0.7);
+    }
+  },
+  bricks: (t) => {
+    const c = baseColor("bricks", [150, 82, 62]);
+    const mortar = [188, 182, 176];
+    t.fill(mortar[0], mortar[1], mortar[2]);
+    const s = t.size, bh = Math.max(3, s / 4 | 0), bw = Math.max(6, s / 2 | 0);
+    for (let row = 0, y = 0; y < s; row++, y += bh) {
+      const off = row % 2 ? -(bw / 2 | 0) : 0;
+      for (let x = off; x < s; x += bw) {
+        const d = (t.rand() - 0.5) * 0.16;
+        for (let yy = y; yy < y + bh - 1 && yy < s; yy++) {
+          for (let xx = x; xx < x + bw - 1; xx++) {
+            if (xx < 0 || xx >= s) continue;
+            t.set(xx, yy, c[0] * (1 + d), c[1] * (1 + d), c[2] * (1 + d));
+          }
+        }
+      }
+    }
+  },
+  sandstone_top: (t) => t.mottle(baseColor("sandstone", [220, 208, 160]), 0.06),
+  sandstone_side: (t) => {
+    const c = baseColor("sandstone", [220, 208, 160]);
+    t.mottle(c, 0.06);
+    const s = t.size;
+    for (let y = 0; y < s; y++) {
+      const d = Math.sin(y * 1.7) * 0.07;
+      for (let x = 0; x < s; x++) {
+        const p = t.get(x, y);
+        t.set(x, y, p[0] * (1 + d), p[1] * (1 + d), p[2] * (1 + d));
+      }
+    }
+    for (let x = 0; x < s; x++) t.set(x, 1, c[0] * 0.85, c[1] * 0.85, c[2] * 0.85);
+  },
+  glass: (t) => {
+    t.fill(255, 255, 255, 0);
+    const c = [200, 230, 245];
+    t.outline(c, 190);
+    const s = t.size;
+    for (let i = 2; i < s / 2; i++) t.set(i, i, 255, 255, 255, 130);
+    for (let i = 2; i < s / 3; i++) t.set(i + 2, i, 255, 255, 255, 70);
+  },
+  leaves: (t) => makeLeaves(t, baseColor("leaves", [64, 124, 56])),
+  birch_leaves: (t) => makeLeaves(t, baseColor("birch_leaves", [120, 158, 86])),
+  pine_leaves: (t) => makeLeaves(t, baseColor("pine_leaves", [40, 92, 64])),
+  glowstone: (t) => {
+    const c = baseColor("glowstone", [238, 214, 120]);
+    t.mottle([c[0] * 0.72, c[1] * 0.66, c[2] * 0.44], 0.12);
+    t.speckle(14, c, 0.18, [1, 3]);
+  },
+  lantern: (t) => {
+    const c = baseColor("lantern", [240, 220, 150]);
+    t.fill(70, 62, 48);
+    const s = t.size;
+    for (let y = 3; y < s - 3; y++) for (let x = 3; x < s - 3; x++) {
+      const d = (t.rand() - 0.5) * 0.2;
+      t.set(x, y, c[0] * (1 + d), c[1] * (1 + d), c[2] * (1 + d));
+    }
+    t.outline([52, 46, 36]);
+  },
+  torch: (t) => {
+    t.fill(0, 0, 0, 0);
+    const s = t.size;
+    const cx0 = (s / 2 | 0) - 1;
+    for (let y = s / 2 | 0; y < s; y++) {
+      t.set(cx0, y, 118, 86, 52);
+      t.set(cx0 + 1, y, 96, 68, 40);
+    }
+    for (let y = (s / 2 | 0) - 3; y < s / 2 | 0; y++) {
+      t.set(cx0, y, 255, 214, 120);
+      t.set(cx0 + 1, y, 255, 178, 70);
+    }
+    t.set(cx0, (s / 2 | 0) - 4, 255, 240, 190);
+  },
+  cactus_top: (t) => {
+    t.mottle([84, 140, 72], 0.1);
+    t.outline([58, 104, 52]);
+  },
+  cactus_side: (t) => {
+    t.mottle([76, 130, 66], 0.1);
+    const s = t.size;
+    for (let y = 0; y < s; y += 4) for (let x = 1; x < s; x += 5) t.set(x, y, 220, 225, 200);
+    for (let y = 0; y < s; y++) {
+      t.set(0, y, 52, 96, 48);
+      t.set(s - 1, y, 52, 96, 48);
+    }
+  },
+  pumpkin_top: (t) => {
+    t.mottle([196, 120, 34], 0.1);
+    t.outline([140, 84, 24]);
+  },
+  pumpkin_side: (t) => {
+    t.mottle([206, 126, 36], 0.09);
+    const s = t.size;
+    for (let x = 2; x < s; x += 4) for (let y = 0; y < s; y++) t.set(x, y, 168, 98, 26);
+  },
+  crafting_table_top: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let i = 0; i <= 3; i++) {
+      const p = Math.round(i * (s - 2) / 3) + 1;
+      for (let k = 1; k < s - 1; k++) {
+        t.set(p, k, 74, 56, 34);
+        t.set(k, p, 74, 56, 34);
+      }
+    }
+  },
+  crafting_table_side: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let y = s / 2 | 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * 0.78, p[1] * 0.74, p[2] * 0.7);
+    }
+  },
+  furnace_top: (t) => {
+    t.mottle(baseColor("cobblestone"), 0.09);
+    t.outline([92, 92, 96]);
+  },
+  furnace_side: (t) => {
+    t.mottle(baseColor("cobblestone"), 0.09);
+    const s = t.size;
+    for (let y = s * 0.35 | 0; y < s - 2; y++) {
+      for (let x = 3; x < s - 3; x++) t.set(x, y, 42, 40, 42);
+    }
+    for (let x = 4; x < s - 4; x++) t.set(x, s - 3, 196, 108, 40);
+  },
+  flower_red: (t) => makeFlower(t, [198, 62, 58]),
+  flower_yellow: (t) => makeFlower(t, [226, 200, 62]),
+  mushroom_red: (t) => {
+    t.fill(0, 0, 0, 0);
+    const s = t.size, cx = s / 2 | 0;
+    for (let y = s - 6; y < s - 2; y++) {
+      t.set(cx, y, 226, 220, 206);
+      t.set(cx - 1, y, 200, 194, 182);
+    }
+    for (let y = s - 10; y < s - 6; y++) {
+      for (let x = cx - 3; x <= cx + 2; x++) t.set(x, y, 190, 52, 46);
+    }
+    t.set(cx - 2, s - 9, 240, 236, 228);
+    t.set(cx + 1, s - 8, 240, 236, 228);
+  },
+  tall_grass: (t) => {
+    t.fill(0, 0, 0, 0);
+    const s = t.size;
+    const g = baseColor("tall_grass", [96, 152, 72]);
+    for (let blade = 0; blade < 7; blade++) {
+      let x = 1 + (t.rand() * (s - 2) | 0);
+      const h = 5 + (t.rand() * (s / 2) | 0);
+      for (let k = 0; k < h; k++) {
+        const y = s - 1 - k;
+        const d = (t.rand() - 0.5) * 0.3;
+        t.set(x, y, g[0] * (1 + d), g[1] * (1 + d), g[2] * (1 + d));
+        if (t.rand() > 0.7) x += t.rand() > 0.5 ? 1 : -1;
+      }
+    }
+  }
+};
+function makeBark(t, c, streak) {
+  t.mottle(c, 0.13);
+  const s = t.size;
+  const dark = streak || [c[0] * 0.62, c[1] * 0.62, c[2] * 0.62];
+  for (let i = 0; i < 5; i++) {
+    let x = t.rand() * s | 0;
+    for (let y = 0; y < s; y++) {
+      t.set(x, y, dark[0], dark[1], dark[2]);
+      if (t.rand() > 0.82) x = (x + (t.rand() > 0.5 ? 1 : s - 1)) % s;
+    }
+  }
+}
+function makeRings(t, c) {
+  t.mottle(c, 0.08);
+  const s = t.size, cx = (s - 1) / 2, cy = (s - 1) / 2;
+  for (let y = 0; y < s; y++) {
+    for (let x = 0; x < s; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      const ring = Math.sin(d * 2.1) * 0.16;
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * (1 + ring), p[1] * (1 + ring), p[2] * (1 + ring));
+    }
+  }
+}
+function makeLeaves(t, c) {
+  t.mottle(c, 0.2);
+  const s = t.size;
+  for (let y = 0; y < s; y++) {
+    for (let x = 0; x < s; x++) {
+      const edge = Math.min(x, y, s - 1 - x, s - 1 - y) === 0;
+      if (edge && t.rand() > 0.88) t.set(x, y, 0, 0, 0, 0);
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    const x = t.rand() * s | 0, y = t.rand() * s | 0;
+    const p = t.get(x, y);
+    if (p[3] > 0) t.set(x, y, p[0] * 0.72, p[1] * 0.72, p[2] * 0.72, p[3]);
+  }
+}
+function makeFlower(t, petal) {
+  t.fill(0, 0, 0, 0);
+  const s = t.size, cx = s / 2 | 0;
+  const stem = [72, 122, 58];
+  for (let y = s / 2 | 0; y < s - 1; y++) t.set(cx, y, stem[0], stem[1], stem[2]);
+  t.set(cx - 1, s * 0.66 | 0, stem[0], stem[1], stem[2]);
+  const top = (s / 2 | 0) - 2;
+  for (let y = top - 2; y <= top + 1; y++) {
+    for (let x = cx - 2; x <= cx + 2; x++) {
+      if (Math.abs(x - cx) + Math.abs(y - (top - 0.5)) > 3) continue;
+      t.set(x, y, petal[0], petal[1], petal[2]);
+    }
+  }
+  t.set(cx, top - 1, 245, 226, 140);
+}
+var ORES = {
+  coal_ore: [38, 38, 40],
+  iron_ore: [196, 148, 112],
+  gold_ore: [238, 200, 84],
+  diamond_ore: [96, 226, 224],
+  emerald_ore: [70, 190, 118],
+  redstone_ore: [186, 54, 54]
+};
+for (const [name, colour] of Object.entries(ORES)) {
+  RECIPES[name] = (t) => {
+    RECIPES.stone(t);
+    for (let i = 0; i < 5; i++) {
+      const cx = 2 + (t.rand() * (t.size - 4) | 0);
+      const cy = 2 + (t.rand() * (t.size - 4) | 0);
+      const r = 1 + (t.rand() * 2 | 0);
+      for (let y = cy - r; y <= cy + r; y++) {
+        for (let x = cx - r; x <= cx + r; x++) {
+          if (Math.hypot(x - cx, y - cy) > r) continue;
+          const d = (t.rand() - 0.5) * 0.25;
+          t.set(x, y, colour[0] * (1 + d), colour[1] * (1 + d), colour[2] * (1 + d));
+        }
+      }
+    }
+  };
+}
+function requiredTextureNames() {
+  const names = /* @__PURE__ */ new Set();
+  for (const spec of Object.values(BLOCK_TEXTURES)) {
+    if (typeof spec === "string") names.add(spec);
+    else for (const v of Object.values(spec)) if (v) names.add(v);
+  }
+  return [...names];
+}
+function generateDefaultTextures(tileSize = 16) {
+  const out = {};
+  for (const name of requiredTextureNames()) {
+    const t = new Tile(tileSize, name);
+    const recipe = RECIPES[name];
+    if (recipe) {
+      recipe(t);
+    } else {
+      t.mottle(colourForTextureName(name), 0.12);
+    }
+    out[name] = t.toCanvas();
+  }
+  return out;
+}
+function colourForTextureName(name) {
+  for (const [key, spec] of Object.entries(BLOCK_TEXTURES)) {
+    const hit = typeof spec === "string" ? spec === name : Object.values(spec).includes(name);
+    if (hit) return baseColor(key);
+  }
+  return [140, 140, 140];
+}
+
+// js/render/resourcepack.js
+var PACK_ALIASES = {
+  stone: ["stone"],
+  dirt: ["dirt"],
+  grass_top: ["grass_block_top", "grass_top"],
+  grass_side: ["grass_block_side", "grass_side"],
+  sand: ["sand"],
+  water: ["water_still", "water"],
+  log_side: ["oak_log", "log_oak"],
+  log_top: ["oak_log_top", "log_oak_top"],
+  leaves: ["oak_leaves", "leaves_oak"],
+  planks: ["oak_planks", "planks_oak"],
+  cobblestone: ["cobblestone"],
+  bedrock: ["bedrock"],
+  gravel: ["gravel"],
+  snow: ["snow"],
+  snow_side: ["grass_block_snow", "grass_side_snowed"],
+  ice: ["ice"],
+  coal_ore: ["coal_ore"],
+  iron_ore: ["iron_ore"],
+  gold_ore: ["gold_ore"],
+  diamond_ore: ["diamond_ore"],
+  emerald_ore: ["emerald_ore"],
+  redstone_ore: ["redstone_ore"],
+  glass: ["glass"],
+  glowstone: ["glowstone"],
+  cactus_top: ["cactus_top"],
+  cactus_side: ["cactus_side"],
+  pumpkin_top: ["pumpkin_top"],
+  pumpkin_side: ["pumpkin_side"],
+  crafting_table_top: ["crafting_table_top"],
+  crafting_table_side: ["crafting_table_side", "crafting_table_front"],
+  furnace_top: ["furnace_top"],
+  furnace_side: ["furnace_front", "furnace_side"],
+  bricks: ["bricks", "brick"],
+  mossy_cobble: ["mossy_cobblestone", "cobblestone_mossy"],
+  clay: ["clay"],
+  sandstone_top: ["sandstone_top"],
+  sandstone_side: ["sandstone", "sandstone_normal"],
+  birch_log_side: ["birch_log", "log_birch"],
+  birch_log_top: ["birch_log_top", "log_birch_top"],
+  birch_leaves: ["birch_leaves", "leaves_birch"],
+  pine_log_side: ["spruce_log", "log_spruce"],
+  pine_leaves: ["spruce_leaves", "leaves_spruce"],
+  flower_red: ["poppy", "flower_rose"],
+  flower_yellow: ["dandelion", "flower_dandelion"],
+  tall_grass: ["short_grass", "grass", "tallgrass"],
+  mushroom_red: ["red_mushroom", "mushroom_red"],
+  torch: ["torch", "torch_on"],
+  obsidian: ["obsidian"],
+  lantern: ["lantern", "sea_lantern"]
+};
+var SIG_EOCD = 101010256;
+var SIG_EOCD64_LOCATOR = 117853008;
+var SIG_CENTRAL = 33639248;
+var SIG_LOCAL = 67324752;
+var ZipReader = class {
+  constructor(arrayBuffer) {
+    this.buf = arrayBuffer;
+    this.view = new DataView(arrayBuffer);
+    this.entries = /* @__PURE__ */ new Map();
+    this._readCentralDirectory();
+  }
+  _readCentralDirectory() {
+    const view = this.view;
+    const len = view.byteLength;
+    let eocd = -1;
+    const scanFrom = Math.max(0, len - 66e3);
+    for (let i = len - 22; i >= scanFrom; i--) {
+      if (view.getUint32(i, true) === SIG_EOCD) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) throw new Error("Not a ZIP archive (no end-of-central-directory record)");
+    let count = view.getUint16(eocd + 10, true);
+    let cdOffset = view.getUint32(eocd + 16, true);
+    if (cdOffset === 4294967295 || count === 65535) {
+      const locator = eocd - 20;
+      if (locator >= 0 && view.getUint32(locator, true) === SIG_EOCD64_LOCATOR) {
+        const z64 = Number(view.getBigUint64(locator + 8, true));
+        count = Number(view.getBigUint64(z64 + 32, true));
+        cdOffset = Number(view.getBigUint64(z64 + 48, true));
+      }
+    }
+    let p = cdOffset;
+    for (let i = 0; i < count; i++) {
+      if (p + 46 > len || view.getUint32(p, true) !== SIG_CENTRAL) break;
+      const method = view.getUint16(p + 10, true);
+      const compSize = view.getUint32(p + 20, true);
+      const size = view.getUint32(p + 24, true);
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      const localOffset = view.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(new Uint8Array(this.buf, p + 46, nameLen));
+      this.entries.set(name, { localOffset, compSize, size, method });
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+  }
+  has(path) {
+    return this.entries.has(path);
+  }
+  list() {
+    return [...this.entries.keys()];
+  }
+  /* Decompress one entry. Returns a Uint8Array. */
+  async read(path) {
+    const e = this.entries.get(path);
+    if (!e) return null;
+    const v = this.view;
+    if (v.getUint32(e.localOffset, true) !== SIG_LOCAL) return null;
+    const nameLen = v.getUint16(e.localOffset + 26, true);
+    const extraLen = v.getUint16(e.localOffset + 28, true);
+    const start = e.localOffset + 30 + nameLen + extraLen;
+    const raw = new Uint8Array(this.buf, start, e.compSize);
+    if (e.method === 0) return raw.slice();
+    if (e.method !== 8) throw new Error(`Unsupported ZIP compression method ${e.method} for ${path}`);
+    const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+};
+async function loadResourcePack(buffer, opts = {}) {
+  const zip = new ZipReader(buffer);
+  const onProgress = opts.onProgress || (() => {
+  });
+  const roots = /* @__PURE__ */ new Set();
+  for (const path of zip.entries.keys()) {
+    const m = path.match(/^assets\/([^/]+)\/textures\/block(?:s)?\//);
+    if (m) roots.add(`assets/${m[1]}/textures/${path.includes("/textures/blocks/") ? "blocks" : "block"}/`);
+  }
+  if (roots.size === 0) {
+    throw new Error("No block textures found \u2014 is this a Minecraft resource pack?");
+  }
+  let meta = {};
+  try {
+    if (zip.has("pack.mcmeta")) {
+      const raw = await zip.read("pack.mcmeta");
+      meta = JSON.parse(new TextDecoder().decode(raw));
+    }
+  } catch (_) {
+  }
+  const names = Object.keys(PACK_ALIASES);
+  const textures = {};
+  const missing = [];
+  let done = 0;
+  for (const ourName of names) {
+    let loaded = null;
+    outer:
+      for (const root of roots) {
+        for (const candidate of PACK_ALIASES[ourName]) {
+          const path = `${root}${candidate}.png`;
+          if (!zip.has(path)) continue;
+          try {
+            const bytes = await zip.read(path);
+            const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+            let frames = 1;
+            let animMeta = null;
+            if (bitmap.height > bitmap.width && bitmap.height % bitmap.width === 0) {
+              frames = bitmap.height / bitmap.width;
+            }
+            const mcmetaPath = `${path}.mcmeta`;
+            if (zip.has(mcmetaPath)) {
+              try {
+                const mm = JSON.parse(new TextDecoder().decode(await zip.read(mcmetaPath)));
+                if (mm && mm.animation) animMeta = mm.animation;
+              } catch (_) {
+              }
+            }
+            loaded = { image: bitmap, frames, meta: animMeta };
+            break outer;
+          } catch (err) {
+            console.warn(`resource pack: failed to decode ${path}`, err);
+          }
+        }
+      }
+    if (loaded) textures[ourName] = loaded;
+    else missing.push(ourName);
+    done++;
+    onProgress(done / names.length, ourName);
+  }
+  return {
+    textures,
+    meta,
+    found: Object.keys(textures).length,
+    missing,
+    // The pack's own resolution, so the atlas can size itself to match rather
+    // than downscaling a 64px pack to 16px.
+    tileSize: guessTileSize(textures)
+  };
+}
+function guessTileSize(textures) {
+  let best = 16;
+  for (const t of Object.values(textures)) {
+    const w = t.image && t.image.width;
+    if (w && w > best) best = w;
+  }
+  return Math.min(best, 128);
+}
+
+// js/render/resources.js
+var DB_NAME = "voxel-odyssey-resources";
+var DB_STORE = "packs";
+var ACTIVE_KEY = "active-pack";
+var Resources = class {
+  constructor(game) {
+    this.game = game;
+    this.atlas = null;
+    this.packName = "Built-in";
+    this.packInfo = null;
+    this._defaults = null;
+    this._tileSize = 16;
+  }
+  async init() {
+    if (typeof document === "undefined" && typeof OffscreenCanvas === "undefined") return this;
+    this._defaults = generateDefaultTextures(16);
+    this._rebuild({}, 16);
+    try {
+      const stored = await this._loadStoredPack();
+      if (stored && stored.buffer) {
+        await this.applyPack(stored.buffer, stored.name, { persist: false });
+      }
+    } catch (err) {
+      console.warn("resources: could not restore stored resource pack", err);
+    }
+    return this;
+  }
+  /* Build (or rebuild) the atlas from the defaults plus any pack overrides. */
+  _rebuild(overrides, tileSize) {
+    const size = tileSize || this._tileSize;
+    const defaults = size === 16 && this._defaults ? this._defaults : generateDefaultTextures(size);
+    const sources = Object.assign({}, defaults, overrides || {});
+    const old = this.atlas;
+    this.atlas = atlas_default.build(sources, { tileSize: size });
+    this._tileSize = size;
+    if (this.game && this.game.world && typeof this.game.world.setAtlas === "function") {
+      this.game.world.setAtlas(this.atlas);
+    }
+    if (old) old.dispose();
+    return this.atlas;
+  }
+  /**
+   * Apply a resource pack from a .zip ArrayBuffer.
+   * @returns {Promise<object>} summary { name, found, missing, tileSize }
+   */
+  async applyPack(buffer, name = "Resource pack", opts = {}) {
+    const events = this.game && this.game.events;
+    const result = await loadResourcePack(buffer, {
+      onProgress: (v, tex) => {
+        if (events) events.emit("resources:progress", { value: v, texture: tex });
+      }
+    });
+    this._rebuild(result.textures, result.tileSize);
+    this.packName = name;
+    this.packInfo = {
+      name,
+      found: result.found,
+      missing: result.missing,
+      tileSize: result.tileSize,
+      description: result.meta && result.meta.pack && result.meta.pack.description || ""
+    };
+    if (opts.persist !== false) {
+      try {
+        await this._storePack(buffer, name);
+      } catch (err) {
+        console.warn("resources: could not persist pack", err);
+      }
+    }
+    if (events) events.emit("resources:pack", this.packInfo);
+    return this.packInfo;
+  }
+  /* Drop back to the procedural textures. */
+  async clearPack() {
+    this._rebuild({}, 16);
+    this.packName = "Built-in";
+    this.packInfo = null;
+    try {
+      await this._deleteStoredPack();
+    } catch (_) {
+    }
+    const events = this.game && this.game.events;
+    if (events) events.emit("resources:pack", null);
+  }
+  /* Advance animated textures (water, fire, lantern glow in packs that have
+     them). Returns true when a layer index changed, meaning chunks that use
+     the animated texture need no work at all — only the lookup table moved. */
+  update(dt) {
+    if (!this.atlas) return false;
+    return this.atlas.update(dt);
+  }
+  /* ---- IndexedDB persistence ------------------------------------------- */
+  _openDB() {
+    return new Promise((resolve, reject) => {
+      if (typeof indexedDB === "undefined") {
+        reject(new Error("no indexedDB"));
+        return;
+      }
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async _storePack(buffer, name) {
+    const db = await this._openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put({ buffer, name, savedAt: Date.now() }, ACTIVE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+  async _loadStoredPack() {
+    const db = await this._openDB();
+    const value = await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const req = tx.objectStore(DB_STORE).get(ACTIVE_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return value;
+  }
+  async _deleteStoredPack() {
+    const db = await this._openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).delete(ACTIVE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+  dispose() {
+    if (this.atlas) this.atlas.dispose();
+    this.atlas = null;
+  }
+};
+
+// shared/protocol.js
+var PROTOCOL_VERSION = 1;
+var MSG = {
+  // client -> server
+  HELLO: 1,
+  PLAYER_STATE: 2,
+  BLOCK_EDIT: 3,
+  CHAT: 4,
+  PONG: 5,
+  INVENTORY_STATE: 6,
+  // server -> client
+  WELCOME: 20,
+  PLAYER_JOIN: 21,
+  PLAYER_LEAVE: 22,
+  SNAPSHOT: 23,
+  BLOCK_SET: 24,
+  BLOCK_REJECT: 25,
+  CHAT_BROADCAST: 26,
+  PING: 27,
+  WORLD_EDITS: 28,
+  KICK: 29,
+  MOB_SNAPSHOT: 30
+};
+var FLAG = {
+  ON_GROUND: 1 << 0,
+  SPRINTING: 1 << 1,
+  SNEAKING: 1 << 2,
+  FLYING: 1 << 3,
+  IN_WATER: 1 << 4,
+  SWINGING: 1 << 5
+  // arm swing (mining / attacking) — drives remote animation
+};
+var textEncoder = new TextEncoder();
+var textDecoder = new TextDecoder();
+var YAW_SCALE = 32767 / Math.PI;
+var PITCH_SCALE = 32767 / (Math.PI / 2);
+var packYaw = (v) => {
+  let a = v % (Math.PI * 2);
+  if (a > Math.PI) a -= Math.PI * 2;
+  if (a < -Math.PI) a += Math.PI * 2;
+  return Math.max(-32767, Math.min(32767, Math.round(a * YAW_SCALE)));
+};
+var unpackYaw = (v) => v / YAW_SCALE;
+var packPitch = (v) => Math.max(-32767, Math.min(32767, Math.round(clampPitch(v) * PITCH_SCALE)));
+var unpackPitch = (v) => v / PITCH_SCALE;
+var clampPitch = (v) => Math.max(-Math.PI / 2, Math.min(Math.PI / 2, v));
+function encodeJson(type, obj) {
+  const body = textEncoder.encode(JSON.stringify(obj));
+  const buf = new ArrayBuffer(1 + body.length);
+  new DataView(buf).setUint8(0, type);
+  new Uint8Array(buf, 1).set(body);
+  return buf;
+}
+function decodeJson(buf, offset = 1) {
+  const bytes = new Uint8Array(buf, offset);
+  return JSON.parse(textDecoder.decode(bytes));
+}
+var PLAYER_STATE_SIZE = 22;
+function encodePlayerState(s) {
+  const buf = new ArrayBuffer(PLAYER_STATE_SIZE);
+  const v = new DataView(buf);
+  v.setUint8(0, MSG.PLAYER_STATE);
+  v.setFloat32(1, s.x, true);
+  v.setFloat32(5, s.y, true);
+  v.setFloat32(9, s.z, true);
+  v.setInt16(13, packYaw(s.yaw || 0), true);
+  v.setInt16(15, packPitch(s.pitch || 0), true);
+  v.setUint8(17, s.flags | 0);
+  v.setUint8(18, s.heldItem | 0);
+  v.setUint16(19, Math.max(0, Math.min(65535, Math.round((s.health || 0) * 100))), true);
+  v.setUint8(21, 0);
+  return buf;
+}
+var SNAPSHOT_HEADER = 7;
+var SNAPSHOT_ENTRY = 2 + 12 + 4 + 1 + 1 + 2;
+function decodeSnapshot(v) {
+  const tick = v.getUint32(1, true);
+  const count = v.getUint16(5, true);
+  const players = [];
+  let o = SNAPSHOT_HEADER;
+  for (let i = 0; i < count; i++) {
+    players.push({
+      id: v.getUint16(o, true),
+      x: v.getFloat32(o + 2, true),
+      y: v.getFloat32(o + 6, true),
+      z: v.getFloat32(o + 10, true),
+      yaw: unpackYaw(v.getInt16(o + 14, true)),
+      pitch: unpackPitch(v.getInt16(o + 16, true)),
+      flags: v.getUint8(o + 18),
+      heldItem: v.getUint8(o + 19),
+      health: v.getUint16(o + 20, true) / 100
+    });
+    o += SNAPSHOT_ENTRY;
+  }
+  return { tick, players };
+}
+var BLOCK_EDIT_SIZE = 17;
+function encodeBlockEdit(seq, x, y, z, blockId, cause) {
+  const buf = new ArrayBuffer(BLOCK_EDIT_SIZE);
+  const v = new DataView(buf);
+  v.setUint8(0, MSG.BLOCK_EDIT);
+  v.setUint32(1, seq >>> 0, true);
+  v.setInt32(5, x | 0, true);
+  v.setUint16(9, y & 65535, true);
+  v.setInt32(11, z | 0, true);
+  v.setUint8(15, blockId & 255);
+  v.setUint8(16, cause | 0);
+  return buf;
+}
+function decodeBlockSet(v) {
+  return {
+    x: v.getInt32(1, true),
+    y: v.getUint16(5, true),
+    z: v.getInt32(7, true),
+    blockId: v.getUint8(11),
+    by: v.getUint16(12, true)
+  };
+}
+function decodeBlockReject(v) {
+  return {
+    seq: v.getUint32(1, true),
+    x: v.getInt32(5, true),
+    y: v.getUint16(9, true),
+    z: v.getInt32(11, true),
+    blockId: v.getUint8(15),
+    reason: v.getUint8(16)
+  };
+}
+function decodeWorldEdits(v) {
+  const n = v.getUint32(1, true);
+  const out = [];
+  let o = 5;
+  for (let i = 0; i < n; i++) {
+    out.push({
+      x: v.getInt32(o, true),
+      y: v.getUint16(o + 4, true),
+      z: v.getInt32(o + 6, true),
+      id: v.getUint8(o + 10)
+    });
+    o += 11;
+  }
+  return out;
+}
+var MOB_ENTRY = 2 + 1 + 12 + 2 + 1;
+function encodeMobSnapshot(mobs) {
+  const buf = new ArrayBuffer(3 + mobs.length * MOB_ENTRY);
+  const v = new DataView(buf);
+  v.setUint8(0, MSG.MOB_SNAPSHOT);
+  v.setUint16(1, mobs.length, true);
+  let o = 3;
+  for (const m of mobs) {
+    v.setUint16(o, m.id, true);
+    o += 2;
+    v.setUint8(o, m.kind);
+    o += 1;
+    v.setFloat32(o, m.x, true);
+    o += 4;
+    v.setFloat32(o, m.y, true);
+    o += 4;
+    v.setFloat32(o, m.z, true);
+    o += 4;
+    v.setInt16(o, packYaw(m.yaw || 0), true);
+    o += 2;
+    v.setUint8(o, m.flags | 0);
+    o += 1;
+  }
+  return buf;
+}
+function decodeMobSnapshot(v) {
+  const n = v.getUint16(1, true);
+  const out = [];
+  let o = 3;
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: v.getUint16(o, true),
+      kind: v.getUint8(o + 2),
+      x: v.getFloat32(o + 3, true),
+      y: v.getFloat32(o + 7, true),
+      z: v.getFloat32(o + 11, true),
+      yaw: unpackYaw(v.getInt16(o + 15, true)),
+      flags: v.getUint8(o + 17)
+    });
+    o += MOB_ENTRY;
+  }
+  return out;
+}
+function messageType(buf) {
+  return new DataView(buf).getUint8(0);
+}
+
+// js/net/client.js
+var INTERP_DELAY = 0.1;
+var BUFFER_KEEP = 1;
+var STATE_SEND_HZ = 20;
+var MOB_SEND_HZ = 10;
+var NetClient = class {
+  constructor(game) {
+    this.game = game;
+    this.socket = null;
+    this.connected = false;
+    this.playerId = 0;
+    this.serverSeed = null;
+    this.players = /* @__PURE__ */ new Map();
+    this.isMobAuthority = false;
+    this.remoteMobs = /* @__PURE__ */ new Map();
+    this.pending = /* @__PURE__ */ new Map();
+    this._seq = 1;
+    this._stateAccum = 0;
+    this._mobAccum = 0;
+    this._clock = 0;
+    this.latency = 0;
+    this.status = "offline";
+    this.chatLog = [];
+  }
+  get isMultiplayer() {
+    return this.connected;
+  }
+  /* ---- connection ---- */
+  connect(url, name) {
+    return new Promise((resolve, reject) => {
+      let socket;
+      try {
+        socket = new WebSocket(url);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      socket.binaryType = "arraybuffer";
+      this.socket = socket;
+      this.status = "connecting";
+      const failEarly = (err) => {
+        this.status = "offline";
+        this.socket = null;
+        reject(err instanceof Error ? err : new Error("Could not reach server"));
+      };
+      socket.onopen = () => {
+        socket.send(encodeJson(MSG.HELLO, { version: PROTOCOL_VERSION, name: name || "Player" }));
+      };
+      socket.onerror = () => {
+        if (!this.connected) failEarly(new Error(`Could not connect to ${url}`));
+      };
+      socket.onclose = (e) => {
+        if (!this.connected) {
+          failEarly(new Error(e.reason || "Connection refused"));
+          return;
+        }
+        this._onDisconnect(e.reason);
+      };
+      socket.onmessage = (ev) => {
+        try {
+          const handled = this._onMessage(ev.data);
+          if (handled === MSG.WELCOME) {
+            this.connected = true;
+            this.status = "connected";
+            resolve(this);
+          }
+        } catch (err) {
+          console.error("net: bad message", err);
+        }
+      };
+    });
+  }
+  disconnect() {
+    if (this.socket) {
+      try {
+        this.socket.close(1e3, "client quit");
+      } catch (_) {
+      }
+    }
+    this._onDisconnect("You disconnected");
+  }
+  _onDisconnect(reason) {
+    const wasConnected = this.connected;
+    this.connected = false;
+    this.status = "offline";
+    this.socket = null;
+    this.players.clear();
+    this.pending.clear();
+    this.remoteMobs.clear();
+    if (wasConnected && this.game.events) {
+      this.game.events.emit("net:disconnected", { reason });
+    }
+  }
+  /* ---- inbound ---- */
+  _onMessage(data) {
+    if (typeof data === "string") return null;
+    const type = messageType(data);
+    const view = new DataView(data);
+    const events = this.game.events;
+    switch (type) {
+      case MSG.WELCOME: {
+        const msg = decodeJson(data);
+        this.playerId = msg.id;
+        this.serverSeed = msg.seed;
+        this.isMobAuthority = !!msg.isMobAuthority;
+        for (const p of msg.players || []) this._addPlayer(p.id, p.name);
+        if (events) events.emit("net:welcome", msg);
+        return MSG.WELCOME;
+      }
+      case MSG.PLAYER_JOIN: {
+        const msg = decodeJson(data);
+        this._addPlayer(msg.id, msg.name);
+        if (events) events.emit("net:join", msg);
+        return type;
+      }
+      case MSG.PLAYER_LEAVE: {
+        const msg = decodeJson(data);
+        this._removePlayer(msg.id);
+        if (events) events.emit("net:leave", msg);
+        return type;
+      }
+      case MSG.SNAPSHOT: {
+        const snap = decodeSnapshot(view);
+        const now2 = this._clock;
+        for (const s of snap.players) {
+          const p = this.players.get(s.id) || this._addPlayer(s.id, `Player ${s.id}`);
+          p.buffer.push({ t: now2, ...s });
+          while (p.buffer.length > 2 && p.buffer[0].t < now2 - BUFFER_KEEP) p.buffer.shift();
+        }
+        return type;
+      }
+      case MSG.BLOCK_SET: {
+        const b = decodeBlockSet(view);
+        this._applyAuthoritativeBlock(b);
+        return type;
+      }
+      case MSG.BLOCK_REJECT: {
+        const r = decodeBlockReject(view);
+        this._rollback(r);
+        return type;
+      }
+      case MSG.WORLD_EDITS: {
+        const edits = decodeWorldEdits(view);
+        this._applyWorldEdits(edits);
+        if (events) events.emit("net:world-edits", { count: edits.length });
+        return type;
+      }
+      case MSG.MOB_SNAPSHOT: {
+        if (!this.isMobAuthority) {
+          const mobs = decodeMobSnapshot(view);
+          this.remoteMobs.clear();
+          for (const m of mobs) this.remoteMobs.set(m.id, m);
+        }
+        return type;
+      }
+      case MSG.CHAT_BROADCAST: {
+        const msg = decodeJson(data);
+        this.chatLog.push(msg);
+        if (this.chatLog.length > 100) this.chatLog.shift();
+        if (events) events.emit("net:chat", msg);
+        return type;
+      }
+      case MSG.KICK: {
+        const msg = decodeJson(data);
+        if (msg.soft) {
+          if (this.game.player && Number.isFinite(msg.x)) {
+            this.game.player.position.set(msg.x, msg.y, msg.z);
+            this.game.player.velocity.set(0, 0, 0);
+          }
+        } else {
+          if (events) events.emit("net:kicked", msg);
+          this.disconnect();
+        }
+        return type;
+      }
+      default:
+        return type;
+    }
+  }
+  _addPlayer(id, name) {
+    let p = this.players.get(id);
+    if (p) return p;
+    p = {
+      id,
+      name,
+      buffer: [],
+      // Rendered (interpolated) state, consumed by the remote-player renderer.
+      render: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, heldItem: 0, health: 20, valid: false }
+    };
+    this.players.set(id, p);
+    return p;
+  }
+  _removePlayer(id) {
+    this.players.delete(id);
+    if (this.game.events) this.game.events.emit("net:player-removed", { id });
+  }
+  /* ---- world reconciliation ---- */
+  // A confirmed edit from the server. If it matches something we predicted,
+  // the prediction was right and we just retire it.
+  _applyAuthoritativeBlock(b) {
+    for (const [seq, p] of this.pending) {
+      if (p.x === b.x && p.y === b.y && p.z === b.z) {
+        this.pending.delete(seq);
+        break;
+      }
+    }
+    if (b.by === this.playerId) return;
+    this._setBlockQuiet(b.x, b.y, b.z, b.blockId);
+  }
+  _rollback(r) {
+    const p = this.pending.get(r.seq);
+    this.pending.delete(r.seq);
+    const truth = r.blockId === 255 ? this._worldgenBlock(r.x, r.y, r.z) : r.blockId;
+    this._setBlockQuiet(r.x, r.y, r.z, truth);
+    const reason = ["too far away", "editing too fast", "protected area", "out of date", "invalid block"][r.reason] || "rejected";
+    if (this.game.toast) this.game.toast(`Block edit ${reason}`, "warn");
+    if (this.game.events) this.game.events.emit("net:rollback", { ...r, predicted: p });
+  }
+  _worldgenBlock(x, y, z) {
+    const wg = this.game.worldgen;
+    if (wg && typeof wg.blockAt === "function") {
+      try {
+        return wg.blockAt(x, y, z);
+      } catch (_) {
+      }
+    }
+    return 0;
+  }
+  _applyWorldEdits(edits) {
+    const world = this.game.world;
+    if (!world) return;
+    for (const e of edits) this._setBlockQuiet(e.x, e.y, e.z, e.id);
+  }
+  // Apply a block without re-broadcasting it (that would echo forever).
+  _setBlockQuiet(x, y, z, id) {
+    const world = this.game.world;
+    if (!world) return;
+    this._suppress = true;
+    try {
+      world.setBlock(x, y, z, id, { cause: "network" });
+    } finally {
+      this._suppress = false;
+    }
+  }
+  /* ---- outbound ---- */
+  /**
+   * Called by the player before applying a block edit locally.
+   * Returns true if the edit should proceed optimistically.
+   */
+  sendBlockEdit(x, y, z, blockId, previous, cause) {
+    if (!this.connected || this._suppress) return true;
+    const seq = this._seq++;
+    this.pending.set(seq, { x, y, z, previous, blockId, at: this._clock });
+    this._send(encodeBlockEdit(seq, x, y, z, blockId, cause));
+    return true;
+  }
+  sendChat(text) {
+    if (!this.connected) return;
+    this._send(encodeJson(MSG.CHAT, { text }));
+  }
+  _send(buf) {
+    if (!this.socket || this.socket.readyState !== 1) return;
+    try {
+      this.socket.send(buf);
+    } catch (_) {
+    }
+  }
+  /* ---- per-frame ---- */
+  update(dt) {
+    this._clock += dt;
+    if (!this.connected) return;
+    this._stateAccum += dt;
+    const stateInterval = 1 / STATE_SEND_HZ;
+    if (this._stateAccum >= stateInterval) {
+      this._stateAccum %= stateInterval;
+      this._sendLocalState();
+    }
+    if (this.isMobAuthority) {
+      this._mobAccum += dt;
+      const mobInterval = 1 / MOB_SEND_HZ;
+      if (this._mobAccum >= mobInterval) {
+        this._mobAccum %= mobInterval;
+        this._sendMobs();
+      }
+    }
+    this._interpolateRemotes();
+  }
+  _sendLocalState() {
+    const pl = this.game.player;
+    if (!pl) return;
+    let flags = 0;
+    if (pl.onGround) flags |= FLAG.ON_GROUND;
+    if (pl.sprinting) flags |= FLAG.SPRINTING;
+    if (pl.sneaking) flags |= FLAG.SNEAKING;
+    if (pl.flying) flags |= FLAG.FLYING;
+    if (pl.inWater) flags |= FLAG.IN_WATER;
+    if (pl.swinging || pl.mining) flags |= FLAG.SWINGING;
+    const held = this.game.inventory && this.game.inventory.selectedItem ? this.game.inventory.selectedItem().blockId || 0 : 0;
+    this._send(encodePlayerState({
+      x: pl.position.x,
+      y: pl.position.y,
+      z: pl.position.z,
+      yaw: pl.yaw,
+      pitch: pl.pitch,
+      flags,
+      heldItem: held,
+      health: pl.health
+    }));
+  }
+  _sendMobs() {
+    const em = this.game.entities;
+    if (!em || !em.entities) return;
+    const mobs = em.entities.slice(0, 200).map((m, i) => ({
+      id: m.netId !== void 0 ? m.netId : m.netId = i + 1,
+      kind: m.typeIndex || 0,
+      x: m.position.x,
+      y: m.position.y,
+      z: m.position.z,
+      yaw: m.yaw || 0,
+      flags: m.onGround ? FLAG.ON_GROUND : 0
+    }));
+    this._send(encodeMobSnapshot(mobs));
+  }
+  /* Advance every remote player to its interpolated position. */
+  _interpolateRemotes() {
+    const renderTime = this._clock - INTERP_DELAY;
+    for (const p of this.players.values()) {
+      const buf = p.buffer;
+      if (buf.length === 0) continue;
+      let a = null, b = null;
+      for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i].t <= renderTime) {
+          a = buf[i];
+          b = buf[i + 1] || null;
+          break;
+        }
+      }
+      if (!a) {
+        a = buf[0];
+        b = null;
+      }
+      const r = p.render;
+      if (!b) {
+        r.x = a.x;
+        r.y = a.y;
+        r.z = a.z;
+        r.yaw = a.yaw;
+        r.pitch = a.pitch;
+      } else {
+        const span = b.t - a.t;
+        const f = span > 0 ? Math.max(0, Math.min(1, (renderTime - a.t) / span)) : 0;
+        r.x = a.x + (b.x - a.x) * f;
+        r.y = a.y + (b.y - a.y) * f;
+        r.z = a.z + (b.z - a.z) * f;
+        r.yaw = lerpAngle(a.yaw, b.yaw, f);
+        r.pitch = a.pitch + (b.pitch - a.pitch) * f;
+      }
+      r.flags = a.flags;
+      r.heldItem = a.heldItem;
+      r.health = a.health;
+      r.valid = true;
+      r.speed = Math.hypot(r.x - (r._px ?? r.x), r.z - (r._pz ?? r.z));
+      r._px = r.x;
+      r._pz = r.z;
+    }
+  }
+  /* Names for the player list UI. */
+  roster() {
+    const out = [{ id: this.playerId, name: "You", self: true }];
+    for (const p of this.players.values()) out.push({ id: p.id, name: p.name, self: false });
+    return out;
+  }
+};
+function lerpAngle(a, b, f) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * f;
+}
+
+// js/net/remotePlayers.js
+var S = {
+  headSize: 0.5,
+  bodyW: 0.5,
+  bodyH: 0.6,
+  bodyD: 0.25,
+  armW: 0.25,
+  armH: 0.6,
+  armD: 0.25,
+  legW: 0.25,
+  legH: 0.7,
+  legD: 0.25
+};
+var SKINS = [
+  { shirt: 4161492, pants: 2832988, skin: 14724222 },
+  { shirt: 13913919, pants: 4860715, skin: 13208927 },
+  { shirt: 5223274, pants: 3099189, skin: 15780256 },
+  { shirt: 14266687, pants: 6048299, skin: 10251077 },
+  { shirt: 10117076, pants: 4008796, skin: 15252370 },
+  { shirt: 13918106, pants: 6040389, skin: 12089938 }
+];
+function boxMesh(w, h, d, colour, material) {
+  const geom = new BoxGeometry(w, h, d);
+  const mesh = new Mesh(geom, material);
+  mesh.userData.baseColour = new Color(colour);
+  return mesh;
+}
+var RemotePlayerRig = class {
+  constructor(id, name) {
+    this.id = id;
+    this.name = name;
+    this.group = new Group();
+    this.group.name = `player_${id}`;
+    const skin = SKINS[id % SKINS.length];
+    this.material = new MeshLambertMaterial({ vertexColors: true });
+    this.parts = {};
+    this._buildBody(skin);
+    this.phase = 0;
+    this.swingTimer = 0;
+    this._lastPos = new Vector3();
+    this._tint = new Color(1, 1, 1);
+  }
+  _buildBody(skin) {
+    const g = this.group;
+    const legTop = S.legH;
+    const bodyMid = legTop + S.bodyH / 2;
+    this.parts.body = coloured(boxMesh(S.bodyW, S.bodyH, S.bodyD, skin.shirt, this.material), skin.shirt);
+    this.parts.body.position.y = bodyMid;
+    g.add(this.parts.body);
+    this.parts.neck = new Group();
+    this.parts.neck.position.y = legTop + S.bodyH;
+    g.add(this.parts.neck);
+    this.parts.head = coloured(boxMesh(S.headSize, S.headSize, S.headSize, skin.skin, this.material), skin.skin);
+    this.parts.head.position.y = S.headSize / 2;
+    this.parts.neck.add(this.parts.head);
+    const mkLimb = (name, w, h, d, colour, x, y) => {
+      const pivot = new Group();
+      pivot.position.set(x, y, 0);
+      const mesh = coloured(boxMesh(w, h, d, colour, this.material), colour);
+      mesh.position.y = -h / 2;
+      pivot.add(mesh);
+      g.add(pivot);
+      this.parts[name] = pivot;
+      return pivot;
+    };
+    const shoulderY = legTop + S.bodyH;
+    mkLimb("armL", S.armW, S.armH, S.armD, skin.shirt, -(S.bodyW / 2 + S.armW / 2), shoulderY);
+    mkLimb("armR", S.armW, S.armH, S.armD, skin.shirt, S.bodyW / 2 + S.armW / 2, shoulderY);
+    mkLimb("legL", S.legW, S.legH, S.legD, skin.pants, -S.legW / 2, legTop);
+    mkLimb("legR", S.legW, S.legH, S.legD, skin.pants, S.legW / 2, legTop);
+    this.nameSprite = makeNameTag(this.name);
+    this.nameSprite.position.y = legTop + S.bodyH + S.headSize + 0.35;
+    g.add(this.nameSprite);
+  }
+  /**
+   * @param {object} r   interpolated render state from NetClient
+   * @param {number} dt  seconds
+   * @param {number} sky 0..1 skylight at the player, already scaled by daylight
+   * @param {number} blk 0..1 blocklight at the player
+   */
+  update(r, dt, sky, blk) {
+    const g = this.group;
+    g.position.set(r.x, r.y, r.z);
+    g.rotation.y = r.yaw;
+    const sneaking = (r.flags & FLAG.SNEAKING) !== 0;
+    const sprinting = (r.flags & FLAG.SPRINTING) !== 0;
+    const swinging = (r.flags & FLAG.SWINGING) !== 0;
+    this.parts.neck.rotation.x = Math.max(-1.4, Math.min(1.4, r.pitch));
+    const moved = Math.hypot(g.position.x - this._lastPos.x, g.position.z - this._lastPos.z);
+    this._lastPos.copy(g.position);
+    this.phase += Math.min(moved, 0.5) * 6.5;
+    const amplitude = Math.min(1, moved / (dt || 0.016) / 4) * (sprinting ? 1.25 : 1);
+    const swing = Math.sin(this.phase) * 0.9 * amplitude;
+    this.parts.legL.rotation.x = swing;
+    this.parts.legR.rotation.x = -swing;
+    this.parts.armL.rotation.x = -swing * 0.8;
+    this.parts.armR.rotation.x = swing * 0.8;
+    if (swinging) this.swingTimer = Math.min(1, this.swingTimer + dt * 5);
+    else this.swingTimer = Math.max(0, this.swingTimer - dt * 5);
+    if (this.swingTimer > 0) {
+      const t = Math.sin(this.swingTimer * Math.PI);
+      this.parts.armR.rotation.x -= t * 1.9;
+      this.parts.armR.rotation.z = -t * 0.35;
+    } else {
+      this.parts.armR.rotation.z = 0;
+    }
+    const targetCrouch = sneaking ? 0.28 : 0;
+    this.parts.body.rotation.x = lerp3(this.parts.body.rotation.x, sneaking ? 0.5 : 0, dt * 10);
+    g.position.y -= lerp3(0, targetCrouch, 1);
+    const level = Math.max(sky, blk);
+    const warm = blk > sky ? 1 : 0;
+    this._tint.setRGB(
+      0.06 + level * (0.94 + warm * 0.06),
+      0.06 + level * 0.94,
+      0.07 + level * (0.94 - warm * 0.2)
+    );
+    applyTint(this.group, this._tint);
+    this.nameSprite.rotation.y = -r.yaw;
+  }
+  dispose() {
+    this.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material && o.material.map) o.material.map.dispose();
+      if (o.material && o.material !== this.material) o.material.dispose();
+    });
+    this.material.dispose();
+    if (this.group.parent) this.group.parent.remove(this.group);
+  }
+};
+function coloured(mesh, hex) {
+  const c = new Color(hex);
+  const count = mesh.geometry.attributes.position.count;
+  const arr = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    arr[i * 3] = c.r;
+    arr[i * 3 + 1] = c.g;
+    arr[i * 3 + 2] = c.b;
+  }
+  mesh.geometry.setAttribute("color", new BufferAttribute(arr, 3));
+  mesh.userData.base = c.clone();
+  return mesh;
+}
+function applyTint(root, tint) {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.userData.base) return;
+    const attr = o.geometry.attributes.color;
+    if (!attr) return;
+    const b = o.userData.base;
+    const r = b.r * tint.r, g = b.g * tint.g, bl = b.b * tint.b;
+    const a = attr.array;
+    if (Math.abs(a[0] - r) < 4e-3 && Math.abs(a[1] - g) < 4e-3 && Math.abs(a[2] - bl) < 4e-3) return;
+    for (let i = 0; i < a.length; i += 3) {
+      a[i] = r;
+      a[i + 1] = g;
+      a[i + 2] = bl;
+    }
+    attr.needsUpdate = true;
+  });
+}
+function makeNameTag(name) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(10,14,24,0.7)";
+  ctx.roundRect ? (ctx.beginPath(), ctx.roundRect(8, 12, 240, 40, 8), ctx.fill()) : ctx.fillRect(8, 12, 240, 40);
+  ctx.font = 'bold 26px "Trebuchet MS", system-ui, sans-serif';
+  ctx.fillStyle = "#e7ecff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(name.slice(0, 16), 128, 33);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  const sprite = new Sprite(new SpriteMaterial({
+    map: tex,
+    // Name tags stay readable through terrain, as in Minecraft — losing track
+    // of a teammate behind a hill is worse than the slight cheat.
+    depthTest: false,
+    transparent: true
+  }));
+  sprite.scale.set(1.6, 0.4, 1);
+  sprite.renderOrder = 999;
+  return sprite;
+}
+var lerp3 = (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t));
+var RemotePlayers = class {
+  constructor(game, net) {
+    this.game = game;
+    this.net = net;
+    this.rigs = /* @__PURE__ */ new Map();
+  }
+  update(dt) {
+    const scene = this.game.scene;
+    const world = this.game.world;
+    if (!scene) return;
+    for (const [id, rig] of this.rigs) {
+      if (!this.net.players.has(id)) {
+        rig.dispose();
+        this.rigs.delete(id);
+      }
+    }
+    if (!this.net.connected) {
+      if (this.rigs.size) {
+        for (const r of this.rigs.values()) r.dispose();
+        this.rigs.clear();
+      }
+      return;
+    }
+    const daylight = world && world.uniforms ? world.uniforms.uDaylight.value : 1;
+    for (const p of this.net.players.values()) {
+      if (!p.render.valid) continue;
+      let rig = this.rigs.get(p.id);
+      if (!rig) {
+        rig = new RemotePlayerRig(p.id, p.name);
+        this.rigs.set(p.id, rig);
+        scene.add(rig.group);
+      }
+      let sky = 1, blk = 0;
+      if (world && typeof world.getLightByte === "function") {
+        const packed = world.getLightByte(
+          Math.floor(p.render.x),
+          Math.floor(p.render.y + 1.5),
+          Math.floor(p.render.z)
+        );
+        sky = (packed >> 4 & 15) / 15 * daylight;
+        blk = (packed & 15) / 15;
+      }
+      rig.update(p.render, dt, sky, blk);
+    }
+  }
+  dispose() {
+    for (const rig of this.rigs.values()) rig.dispose();
+    this.rigs.clear();
+  }
+};
+
 // js/fx/sky.js
 var DAY_LENGTH = 600;
 var DOME_RADIUS = 480;
@@ -38359,6 +41446,9 @@ var Sky = class {
     this.sun = null;
     this.moon = null;
     this._lightLevel = 1;
+    this._terrainTint = [1, 1, 1];
+    this._terrainDaylight = 1;
+    this._elapsed = 0;
     this._initialized = false;
   }
   /* ----------------------------------------------------------------------
@@ -38571,6 +41661,7 @@ var Sky = class {
   update(dt) {
     if (!this._initialized) return;
     if (!(dt > 0)) dt = 0;
+    this._elapsed += dt;
     const prev = this.timeOfDay;
     this.timeOfDay += dt / DAY_LENGTH;
     if (this.timeOfDay >= 1) this.timeOfDay -= Math.floor(this.timeOfDay);
@@ -38681,6 +41772,12 @@ var Sky = class {
     else mesh.lookAt(0, 0, 0);
   }
   _updateLights(p, t) {
+    const day = clamp01(p.light);
+    const moonlit = [0.3, 0.38, 0.62];
+    this._terrainTint[0] = lerp2(moonlit[0], p.sun[0], day);
+    this._terrainTint[1] = lerp2(moonlit[1], p.sun[1], day);
+    this._terrainTint[2] = lerp2(moonlit[2], p.sun[2], day);
+    this._terrainDaylight = 0.16 + 0.84 * day;
     if (this.hemi) {
       setColor(this.hemi.color, p.hemiSky);
       setColor(this.hemi.groundColor, p.hemiGround);
@@ -38758,6 +41855,17 @@ var Sky = class {
   }
   getLightLevel() {
     return clamp01(this._lightLevel);
+  }
+  /* The state the voxel terrain shader needs each frame: how strong daylight
+     currently is, and what colour it is. Terrain lighting is baked per-vertex
+     (see world/lighting.js) and combined with these at draw time, so a sunset
+     recolours the entire world without re-meshing a single chunk. */
+  getTerrainLight() {
+    return {
+      daylight: this._terrainDaylight,
+      skyTint: this._terrainTint,
+      time: this._elapsed || 0
+    };
   }
   // Returns a unit Vector3 pointing from the world toward the sun (for shaders
   // or gameplay that wants the sun direction). Safe before init.
@@ -39217,9 +42325,9 @@ var HUD = class {
   _drawClock(t) {
     const ctx = this.el.clockCtx;
     if (!ctx) return;
-    const S = CLOCK_SIZE;
-    const cx = S / 2, cy = S / 2, r = S / 2 - 4;
-    ctx.clearRect(0, 0, S, S);
+    const S2 = CLOCK_SIZE;
+    const cx = S2 / 2, cy = S2 / 2, r = S2 / 2 - 4;
+    ctx.clearRect(0, 0, S2, S2);
     const dayAmt = clamp2(Math.sin(t * Math.PI * 2 - Math.PI / 2) * 0.5 + 0.5, 0, 1);
     const sky = this._mix([22, 30, 54], [120, 180, 240], dayAmt);
     ctx.beginPath();
@@ -39529,6 +42637,83 @@ var Menus = class {
   /* =====================================================================
      Main menu (title screen)
      ===================================================================== */
+  /* Multiplayer join screen. Defaults to the origin the page was served from,
+     because the game server also serves the game — so someone who opened a
+     friend's link can just press Join without knowing what a WebSocket URL is. */
+  showMultiplayer() {
+    if (!this.layer) return;
+    this._beforeOpenMenu();
+    this._clearOverlay();
+    this._dismissInventoryIfOpen();
+    this.current = "multiplayer";
+    const ov = this._ensureOverlay(true);
+    const panel = this._make("div", { class: "menu-panel center-stack" });
+    panel.appendChild(this._make("h2", { text: "Join Multiplayer" }));
+    panel.appendChild(this._make("p", {
+      class: "subtitle",
+      text: "Connect to a Voxel Odyssey server. Run one with: node server/index.js"
+    }));
+    const store = this.game && this.game.state && this.game.state.settings || {};
+    const defaultUrl = (() => {
+      if (store.serverUrl) return store.serverUrl;
+      if (typeof location !== "undefined" && /^https?:/.test(location.protocol)) {
+        return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+      }
+      return "ws://localhost:8090";
+    })();
+    panel.appendChild(this._make("div", { class: "section-title", text: "SERVER" }));
+    const urlInput = this._make("input", {
+      class: "select",
+      type: "text",
+      value: defaultUrl,
+      style: "width:100%; margin-bottom:8px;"
+    });
+    panel.appendChild(urlInput);
+    panel.appendChild(this._make("div", { class: "section-title", text: "NAME" }));
+    const nameInput = this._make("input", {
+      class: "select",
+      type: "text",
+      placeholder: "Player",
+      value: store.playerName || "",
+      style: "width:100%; margin-bottom:8px;"
+    });
+    panel.appendChild(nameInput);
+    const statusLine = this._make("p", { class: "subtitle", text: "" });
+    panel.appendChild(statusLine);
+    const joinBtn = this._button("Join Server", {
+      onClick: async () => {
+        const url = urlInput.value.trim();
+        const name = nameInput.value.trim() || "Player";
+        if (!url) {
+          statusLine.textContent = "Enter a server address.";
+          return;
+        }
+        joinBtn.disabled = true;
+        statusLine.textContent = `Connecting to ${url}\u2026`;
+        try {
+          if (this.game.state && this.game.state.set) {
+            this.game.state.set("serverUrl", url);
+            this.game.state.set("playerName", name);
+          }
+          await this._emitJoin(url, name);
+        } catch (err) {
+          statusLine.textContent = err.message || "Could not connect.";
+          joinBtn.disabled = false;
+        }
+      }
+    });
+    panel.appendChild(joinBtn);
+    panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._button("Back", { onClick: () => this.showMainMenu() }));
+    ov.appendChild(panel);
+  }
+  // Kept separate so the connect promise can be awaited by the caller and any
+  // failure surfaces in the dialog rather than only in the console.
+  _emitJoin(url, name) {
+    return new Promise((resolve, reject) => {
+      this._emit("game:join", { url, name, resolve, reject });
+    });
+  }
   showMainMenu() {
     if (!this.layer) return;
     this._beforeOpenMenu();
@@ -39569,6 +42754,10 @@ var Menus = class {
         onClick: () => this._emit("game:continue", {})
       }));
     }
+    panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._button("Join Multiplayer", {
+      onClick: () => this.showMultiplayer()
+    }));
     panel.appendChild(this._make("hr", { class: "sep" }));
     panel.appendChild(this._button("Settings", { onClick: () => this.showSettings("main") }));
     panel.appendChild(this._button("How to Play", { onClick: () => this.showControls("main") }));
@@ -39642,6 +42831,10 @@ var Menus = class {
     panel.appendChild(this._slider("sfxVolume", "Sound Effects", 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
     panel.appendChild(this._slider("musicVolume", "Music", 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
     panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._button("Customise Controls\u2026", {
+      onClick: () => this.showKeybinds(back)
+    }));
     const footer = this._make("div", { class: "row" });
     footer.appendChild(this._button("Reset to Defaults", {
       small: true,
@@ -39771,6 +42964,102 @@ var Menus = class {
   /* =====================================================================
      Controls / How to Play
      ===================================================================== */
+  /* Key rebinding screen. Clicking an action arms a one-shot capture of the
+     next keypress; a key already used elsewhere is reported rather than
+     silently double-bound, since a duplicate binding is very hard to diagnose
+     from inside the game. */
+  showKeybinds(back = "pause") {
+    if (!this.layer) return;
+    this._beforeOpenMenu();
+    this._clearOverlay();
+    this.current = "keybinds";
+    const input = this.game.input;
+    const state = this.game.state;
+    const ov = this._ensureOverlay(back === "main");
+    const panel = this._make("div", { class: "menu-panel" });
+    panel.appendChild(this._make("h2", { text: "Controls" }));
+    const hint = this._make("p", { class: "subtitle", text: "Click a binding, then press a key. Esc cancels." });
+    panel.appendChild(hint);
+    const ACTIONS = [
+      ["forward", "Move forward"],
+      ["back", "Move back"],
+      ["left", "Strafe left"],
+      ["right", "Strafe right"],
+      ["jump", "Jump"],
+      ["sneak", "Sneak"],
+      ["sprint", "Sprint"],
+      ["inventory", "Inventory"],
+      ["drop", "Drop item"],
+      ["fly", "Toggle flight"],
+      ["debug", "Debug overlay"]
+    ];
+    const list = this._make("div", { class: "keybind-list" });
+    let capturing = null;
+    const label = (codes) => (codes || []).map(prettyKeyName).join(" / ") || "\u2014";
+    const rebuild = () => {
+      list.innerHTML = "";
+      for (const [action, title] of ACTIONS) {
+        const row = this._make("div", { class: "keybind-row" });
+        row.appendChild(this._make("span", { class: "keybind-name", text: title }));
+        const btn = this._make("button", {
+          class: "keybind-key",
+          text: capturing && capturing.action === action ? "Press a key\u2026" : label(input.bindings[action])
+        });
+        btn.addEventListener("click", () => {
+          capturing = { action };
+          rebuild();
+        });
+        row.appendChild(btn);
+        list.appendChild(row);
+      }
+    };
+    const onKey = (e) => {
+      if (!capturing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const action = capturing.action;
+      capturing = null;
+      if (e.code === "Escape") {
+        rebuild();
+        return;
+      }
+      const clash = input.actionUsing(e.code, action);
+      if (clash) {
+        hint.textContent = `${prettyKeyName(e.code)} is already used by "${clash}". Pick another key.`;
+        rebuild();
+        return;
+      }
+      const next = Object.assign({}, state.settings.keyBindings || {});
+      next[action] = [e.code];
+      state.set("keyBindings", next);
+      input.applyBindings(next);
+      hint.textContent = `Bound ${prettyKeyName(e.code)} to "${action}".`;
+      rebuild();
+    };
+    window.addEventListener("keydown", onKey, true);
+    this._keybindCleanup = () => window.removeEventListener("keydown", onKey, true);
+    rebuild();
+    panel.appendChild(list);
+    panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._button("Reset to Defaults", {
+      onClick: () => {
+        state.set("keyBindings", {});
+        input.applyBindings({});
+        hint.textContent = "Controls reset to defaults.";
+        rebuild();
+      }
+    }));
+    panel.appendChild(this._button("Back", {
+      onClick: () => {
+        if (this._keybindCleanup) {
+          this._keybindCleanup();
+          this._keybindCleanup = null;
+        }
+        this.showSettings(back);
+      }
+    }));
+    ov.appendChild(panel);
+  }
   showControls(back = "main") {
     if (!this.layer) return;
     this._beforeOpenMenu();
@@ -40366,6 +43655,39 @@ var Menus = class {
     if (this.tooltip) this.tooltip.style.display = "none";
   }
 };
+function prettyKeyName(code) {
+  if (!code) return "\u2014";
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) return `Num ${code.slice(6)}`;
+  if (code.startsWith("Arrow")) return `${code.slice(5)} Arrow`;
+  const NAMES = {
+    Space: "Space",
+    ShiftLeft: "Left Shift",
+    ShiftRight: "Right Shift",
+    ControlLeft: "Left Ctrl",
+    ControlRight: "Right Ctrl",
+    AltLeft: "Left Alt",
+    AltRight: "Right Alt",
+    Escape: "Esc",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    CapsLock: "Caps Lock",
+    Backquote: "`",
+    Minus: "-",
+    Equal: "=",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backslash: "\\",
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/"
+  };
+  return NAMES[code] || code;
+}
 
 // js/main.js
 var LOADING_TIPS = [
@@ -40421,6 +43743,9 @@ async function boot() {
     sky: null,
     hud: null,
     menus: null,
+    resources: null,
+    net: null,
+    remotePlayers: null,
     // runtime
     dt: 0,
     elapsed: 0,
@@ -40444,9 +43769,13 @@ async function boot() {
   game.player = new Player(game);
   game.hud = new HUD(game);
   game.menus = new Menus(game);
+  game.resources = new Resources(game);
+  game.net = new NetClient(game);
+  game.remotePlayers = new RemotePlayers(game, game.net);
   const initOrder = [
     "worldgen",
     "world",
+    "resources",
     "inventory",
     "crafting",
     "particles",
@@ -40467,7 +43796,12 @@ async function boot() {
       }
     }
   }
+  input.applyBindings(state.settings.keyBindings);
+  events.on("settings:change", ({ key }) => {
+    if (key === "keyBindings" || key === "*") input.applyBindings(state.settings.keyBindings);
+  });
   window.GAME = game;
+  setupResourcePackDrop(game);
   const menuCam = { angle: 0, center: new Vector3(8, WATER_LEVEL + 6, 8), radius: 28, height: 18 };
   startWorld(
     hashString("voxel-odyssey-" + Math.floor(Math.random() * 1e6)),
@@ -40490,6 +43824,32 @@ async function boot() {
     }
     startWorld(save.seed, save, false);
     enterPlay();
+  });
+  events.on("game:join", async ({ url, name, resolve, reject }) => {
+    try {
+      await game.net.connect(url, name);
+      const seed = typeof game.net.serverSeed === "string" ? hashString(game.net.serverSeed) : game.net.serverSeed | 0;
+      state.set("gamemode", "survival");
+      startWorld(seed, null, false);
+      enterPlay();
+      game.toast(`Connected to ${url}`, "good");
+      if (resolve) resolve();
+    } catch (err) {
+      console.error("join failed", err);
+      if (reject) reject(err);
+      else game.toast(err.message || "Could not connect", "bad");
+    }
+  });
+  events.on("net:disconnected", ({ reason }) => {
+    game.toast(`Disconnected: ${reason || "connection lost"}`, "bad");
+  });
+  events.on("net:kicked", ({ reason }) => {
+    game.toast(`Kicked: ${reason || "no reason given"}`, "bad");
+  });
+  events.on("net:join", ({ name }) => game.toast(`${name} joined`, "good"));
+  events.on("net:leave", ({ id }) => {
+    const p = game.net.players.get(id);
+    game.toast(`${p && p.name || "A player"} left`, "warn");
   });
   events.on("game:save", () => {
     saveGame();
@@ -40662,7 +44022,11 @@ async function boot() {
           state.flags.debug = !state.flags.debug;
         }
       }
+      input.pollGamepad(state.settings);
+      if (game.net) game.net.update(dt);
+      if (game.remotePlayers) game.remotePlayers.update(dt);
       game.audio.update(dt);
+      if (game.resources) game.resources.update(dt);
       game.hud.update(dt);
       game.menus.update(dt);
     } catch (err) {
@@ -40672,6 +44036,55 @@ async function boot() {
       }
     } finally {
       input.lateUpdate();
+    }
+  });
+}
+function setupResourcePackDrop(game) {
+  if (typeof window === "undefined") return;
+  let overlay = null;
+  const showHint = (text, kind) => {
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "pack-drop-hint";
+      document.body.appendChild(overlay);
+    }
+    overlay.textContent = text;
+    overlay.dataset.kind = kind || "info";
+    overlay.hidden = false;
+  };
+  const hideHint = () => {
+    if (overlay) overlay.hidden = true;
+  };
+  window.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    showHint("Drop a resource pack (.zip) to apply it");
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (e.relatedTarget === null) hideHint();
+  });
+  window.addEventListener("drop", async (e) => {
+    if (!e.dataTransfer || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!/\.zip$/i.test(file.name)) {
+      showHint(`"${file.name}" is not a .zip resource pack`, "error");
+      setTimeout(hideHint, 3e3);
+      return;
+    }
+    showHint(`Loading ${file.name}\u2026`);
+    try {
+      const buffer = await file.arrayBuffer();
+      const info = await game.resources.applyPack(buffer, file.name.replace(/\.zip$/i, ""));
+      const msg = info.missing.length ? `${info.name}: ${info.found} textures (${info.missing.length} not in pack, using built-ins)` : `${info.name}: all ${info.found} textures loaded`;
+      showHint(msg, "ok");
+      game.toast(msg, "good");
+      setTimeout(hideHint, 4e3);
+    } catch (err) {
+      console.error("resource pack failed", err);
+      showHint(`Could not load pack: ${err.message}`, "error");
+      game.toast(`Resource pack failed: ${err.message}`, "bad");
+      setTimeout(hideHint, 5e3);
     }
   });
 }
