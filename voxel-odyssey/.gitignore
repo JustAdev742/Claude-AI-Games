@@ -11,3 +11,8 @@ tests/shot_*.png
 # everything else in there is intermediate build/test output.
 dist/*
 !dist/voxel-odyssey.html
+
+# Downloaded resource packs. Complete Minecraft texture packs are almost
+# always All Rights Reserved: fine to download and play with privately,
+# not fine to redistribute by committing them here.
+packs/

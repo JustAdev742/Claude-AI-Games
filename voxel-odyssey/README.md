@@ -87,6 +87,25 @@ naming is understood. The pack is remembered between sessions.
 Without a pack the game synthesizes its own complete 16px texture set at
 startup, generated as code rather than shipped as art.
 
+### Finding and checking packs
+
+```bash
+node tools/fetch-pack.mjs --search faithful      # search Modrinth
+node tools/fetch-pack.mjs <modrinth-slug>        # download into packs/
+node tools/fetch-pack.mjs --check some-pack.zip  # coverage report only
+```
+
+`--check` reports how many of the game's texture slots a pack actually fills,
+which is the quickest way to tell a complete pack from a partial one. It is
+worth running first: many popular "texture packs" turn out to be PBR
+supplements whose files are all `_n`/`_s` normal and specular maps with no
+base colour textures, so they change nothing in game. The tool calls that out
+explicitly.
+
+`packs/` is gitignored. Complete Minecraft texture packs are substantial
+original artwork and are nearly always All Rights Reserved — fine to download
+and play with privately, not something this repository should redistribute.
+
 ## 🎮 Controls
 
 | Action | Key |

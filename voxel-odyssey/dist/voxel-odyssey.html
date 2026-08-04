@@ -31374,6 +31374,7 @@ var GameState = class {
 };
 
 // js/core/input.js
+var MAX_LOCK_FAILURES = 4;
 var DEFAULT_BINDINGS = {
   forward: ["KeyW", "ArrowUp"],
   back: ["KeyS", "ArrowDown"],
@@ -31409,7 +31410,11 @@ var Input = class {
     this.locked = false;
     this.enabled = true;
     this.virtualLock = false;
-    this._lockUnavailable = false;
+    this._lockFailures = 0;
+    this._lockRetry = null;
+    this._edgeTurn = 0;
+    this._pointerX = 0;
+    this._pointerY = 0;
     this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
     this.gamepad = {
       connected: false,
@@ -31454,6 +31459,8 @@ var Input = class {
       this._buttonReleased.add(e.button);
     };
     this._onMouseMove = (e) => {
+      this._pointerX = e.clientX;
+      this._pointerY = e.clientY;
       if (this.locked) {
         this.mouseDX += e.movementX || 0;
         this.mouseDY += e.movementY || 0;
@@ -31465,10 +31472,19 @@ var Input = class {
     };
     this._onContext = (e) => e.preventDefault();
     this._onPointerLockChange = () => {
-      if (this.virtualLock) return;
-      this._setLocked(document.pointerLockElement === this.canvas);
+      const real = document.pointerLockElement === this.canvas;
+      if (real) {
+        this._lockFailures = 0;
+        if (this.virtualLock) {
+          this.virtualLock = false;
+          this.canvas.classList.remove("virtual-lock");
+        }
+      } else if (this.virtualLock) {
+        return;
+      }
+      this._setLocked(real);
     };
-    this._onPointerLockError = () => this._useVirtualLock();
+    this._onPointerLockError = () => this._onLockFailed();
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("blur", this._onBlur);
@@ -31500,15 +31516,19 @@ var Input = class {
     if (this.events) this.events.emit("pointerlock", { locked, virtual: this.virtualLock });
   }
   // Fall back to cursor-hidden mousemove steering when real pointer lock is
-  // denied. Once denied we stop asking, so we don't spam failing requests.
+  // denied, so the player can still look around. This is a fallback, not a
+  // verdict: requestLock keeps retrying the real API.
   _useVirtualLock() {
-    this._lockUnavailable = true;
     this.virtualLock = true;
     this.canvas.classList.add("virtual-lock");
     this._setLocked(true);
   }
   requestLock() {
-    if (this._lockUnavailable || !this.canvas.requestPointerLock) {
+    if (!this.canvas.requestPointerLock) {
+      this._useVirtualLock();
+      return;
+    }
+    if (this._lockFailures >= MAX_LOCK_FAILURES) {
       this._useVirtualLock();
       return;
     }
@@ -31516,10 +31536,21 @@ var Input = class {
     try {
       p = this.canvas.requestPointerLock();
     } catch (e) {
-      this._useVirtualLock();
+      this._onLockFailed();
       return;
     }
-    if (p && typeof p.catch === "function") p.catch(() => this._useVirtualLock());
+    if (p && typeof p.catch === "function") p.catch(() => this._onLockFailed());
+  }
+  _onLockFailed() {
+    this._lockFailures++;
+    this._useVirtualLock();
+    if (this._lockRetry) clearTimeout(this._lockRetry);
+    this._lockRetry = setTimeout(() => {
+      this._lockRetry = null;
+      if (this.virtualLock && this.state && this.state.flags && this.state.flags.mode === "play" && !this.state.flags.paused && !this.state.flags.inventoryOpen) {
+        this.requestLock();
+      }
+    }, 1200);
   }
   exitLock() {
     if (this.virtualLock) {
@@ -31671,6 +31702,30 @@ var Input = class {
   }
   padPressed(button) {
     return this.gamepad.buttons.has(button) && !this.gamepad._prevButtons.has(button);
+  }
+  /* Extra turn rate contributed by the pointer resting near a window edge.
+     Only used in the fallback: with real pointer lock the cursor is captured
+     and can never reach an edge, but without it the cursor stops at the
+     border and you simply cannot turn any further. Pushing against the edge
+     keeps turning, which restores unlimited rotation.
+     Returns radians/sec (x = yaw, y = pitch). */
+  edgeTurn() {
+    if (!this.virtualLock || !this.locked) return { x: 0, y: 0 };
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    const w = window.innerWidth, h = window.innerHeight;
+    const margin = Math.max(40, Math.min(140, w * 0.08));
+    const ramp = (dist) => {
+      if (dist >= margin) return 0;
+      const t = 1 - dist / margin;
+      return t * t;
+    };
+    let x = 0, y = 0;
+    x -= ramp(this._pointerX);
+    x += ramp(w - this._pointerX);
+    y -= ramp(this._pointerY);
+    y += ramp(h - this._pointerY);
+    const SPEED = 2.4;
+    return { x: x * SPEED, y: y * SPEED };
   }
   /* Smoothed look delta for this frame. Smoothing is an exponential blend
      toward the raw delta; at 0 it returns the raw value unchanged so the
@@ -35693,11 +35748,18 @@ var Player = class {
     const invert = settings.invertY ? -1 : 1;
     this.yaw -= dx * sens;
     this.pitch += dy * sens * invert;
+    const dt = this.game.dt || 0.016;
     if (input.gamepad && input.gamepad.connected) {
       const speed = settings.gamepadLookSpeed != null ? settings.gamepadLookSpeed : 2.6;
-      const dt = this.game.dt || 0.016;
       this.yaw -= input.gamepad.lookX * speed * dt;
       this.pitch += input.gamepad.lookZ * speed * dt * invert;
+    }
+    if (input.edgeTurn) {
+      const e = input.edgeTurn();
+      if (e.x !== 0 || e.y !== 0) {
+        this.yaw -= e.x * dt;
+        this.pitch += e.y * dt * invert;
+      }
     }
     this.pitch = clamp2(this.pitch, -PITCH_LIMIT, PITCH_LIMIT);
     if (this.yaw > Math.PI) this.yaw -= Math.PI * 2;
@@ -35747,8 +35809,8 @@ var Player = class {
     this.sprinting = wantSprint;
     const axis = input.moveAxis ? input.moveAxis() : { x: 0, z: 0 };
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
-    let wishX = axis.x * cy - axis.z * sy;
-    let wishZ = -axis.x * sy - axis.z * cy;
+    let wishX = axis.x * cy + axis.z * sy;
+    let wishZ = -axis.x * sy + axis.z * cy;
     const wishLen = Math.hypot(wishX, wishZ);
     if (wishLen > 1e-4) {
       wishX /= wishLen;
@@ -40301,6 +40363,8 @@ var PACK_ALIASES = {
   obsidian: ["obsidian"],
   lantern: ["lantern", "sea_lantern"]
 };
+var NAME_DECODER = new TextDecoder();
+var decodeText = (bytes) => NAME_DECODER.decode(bytes);
 var SIG_EOCD = 101010256;
 var SIG_EOCD64_LOCATOR = 117853008;
 var SIG_CENTRAL = 33639248;
@@ -40344,7 +40408,7 @@ var ZipReader = class {
       const extraLen = view.getUint16(p + 30, true);
       const commentLen = view.getUint16(p + 32, true);
       const localOffset = view.getUint32(p + 42, true);
-      const name = new TextDecoder().decode(new Uint8Array(this.buf, p + 46, nameLen));
+      const name = NAME_DECODER.decode(new Uint8Array(this.buf, p + 46, nameLen));
       this.entries.set(name, { localOffset, compSize, size, method });
       p += 46 + nameLen + extraLen + commentLen;
     }
@@ -40387,7 +40451,7 @@ async function loadResourcePack(buffer, opts = {}) {
   try {
     if (zip.has("pack.mcmeta")) {
       const raw = await zip.read("pack.mcmeta");
-      meta = JSON.parse(new TextDecoder().decode(raw));
+      meta = JSON.parse(decodeText(raw));
     }
   } catch (_) {
   }
@@ -40395,40 +40459,51 @@ async function loadResourcePack(buffer, opts = {}) {
   const textures = {};
   const missing = [];
   let done = 0;
+  const jobs = [];
   for (const ourName of names) {
-    let loaded = null;
+    let path = null;
     outer:
       for (const root of roots) {
         for (const candidate of PACK_ALIASES[ourName]) {
-          const path = `${root}${candidate}.png`;
-          if (!zip.has(path)) continue;
-          try {
-            const bytes = await zip.read(path);
-            const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-            let frames = 1;
-            let animMeta = null;
-            if (bitmap.height > bitmap.width && bitmap.height % bitmap.width === 0) {
-              frames = bitmap.height / bitmap.width;
-            }
-            const mcmetaPath = `${path}.mcmeta`;
-            if (zip.has(mcmetaPath)) {
-              try {
-                const mm = JSON.parse(new TextDecoder().decode(await zip.read(mcmetaPath)));
-                if (mm && mm.animation) animMeta = mm.animation;
-              } catch (_) {
-              }
-            }
-            loaded = { image: bitmap, frames, meta: animMeta };
+          const p = `${root}${candidate}.png`;
+          if (zip.has(p)) {
+            path = p;
             break outer;
-          } catch (err) {
-            console.warn(`resource pack: failed to decode ${path}`, err);
           }
         }
       }
-    if (loaded) textures[ourName] = loaded;
+    if (path) jobs.push({ ourName, path });
     else missing.push(ourName);
-    done++;
-    onProgress(done / names.length, ourName);
+  }
+  const CONCURRENCY = 8;
+  const decodeOne = async ({ ourName, path }) => {
+    try {
+      const bytes = await zip.read(path);
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      let frames = 1;
+      let animMeta = null;
+      if (bitmap.height > bitmap.width && bitmap.height % bitmap.width === 0) {
+        frames = bitmap.height / bitmap.width;
+      }
+      const mcmetaPath = `${path}.mcmeta`;
+      if (zip.has(mcmetaPath)) {
+        try {
+          const mm = JSON.parse(decodeText(await zip.read(mcmetaPath)));
+          if (mm && mm.animation) animMeta = mm.animation;
+        } catch (_) {
+        }
+      }
+      textures[ourName] = { image: bitmap, frames, meta: animMeta };
+    } catch (err) {
+      console.warn(`resource pack: failed to decode ${path}`, err);
+      missing.push(ourName);
+    } finally {
+      done++;
+      onProgress(done / Math.max(1, jobs.length), ourName);
+    }
+  };
+  for (let i = 0; i < jobs.length; i += CONCURRENCY) {
+    await Promise.all(jobs.slice(i, i + CONCURRENCY).map(decodeOne));
   }
   return {
     textures,
@@ -41512,7 +41587,7 @@ var Sky = class {
       color: 16774084,
       fog: false,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       transparent: true,
       opacity: 1
     });
@@ -41525,7 +41600,7 @@ var Sky = class {
       color: 16771488,
       fog: false,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       transparent: true,
       opacity: 0.28
     });
@@ -41539,7 +41614,7 @@ var Sky = class {
       color: 15659263,
       fog: false,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       transparent: true,
       opacity: 1
     });
@@ -41591,7 +41666,10 @@ var Sky = class {
       // faded in at night
       fog: false,
       depthWrite: false,
-      depthTest: false
+      // Stars are occluded by terrain for the same reason the sun is: they
+      // are drawn after opaque geometry, so without the test a mountain at
+      // night has a starfield painted across it.
+      depthTest: true
     });
     this.stars = new Points(geo, this.starMat);
     this.stars.frustumCulled = false;
@@ -41607,6 +41685,8 @@ var Sky = class {
       transparent: true,
       opacity: 0.55,
       depthWrite: false,
+      depthTest: true,
+      // a hill in front of a cloud must hide it
       fog: true,
       // clouds DO catch fog so they fade with distance
       side: DoubleSide
