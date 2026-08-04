@@ -258,14 +258,26 @@ export class Player {
     this.yaw -= dx * sens;
     this.pitch += dy * sens * invert;
 
+    const dt = this.game.dt || 0.016;
+
     // Gamepad look is a RATE, not a delta: a stick reports how far it is
     // pushed, so it must be scaled by frame time or turning speed would
     // depend on frame rate.
     if (input.gamepad && input.gamepad.connected) {
       const speed = settings.gamepadLookSpeed != null ? settings.gamepadLookSpeed : 2.6;
-      const dt = this.game.dt || 0.016;
       this.yaw -= input.gamepad.lookX * speed * dt;
       this.pitch += input.gamepad.lookZ * speed * dt * invert;
+    }
+
+    // Edge-turn, also a rate. Only non-zero in the no-pointer-lock fallback,
+    // where the cursor stops at the window border and would otherwise cap how
+    // far you can turn.
+    if (input.edgeTurn) {
+      const e = input.edgeTurn();
+      if (e.x !== 0 || e.y !== 0) {
+        this.yaw -= e.x * dt;
+        this.pitch += e.y * dt * invert;
+      }
     }
 
     this.pitch = clamp(this.pitch, -PITCH_LIMIT, PITCH_LIMIT);
@@ -331,10 +343,17 @@ export class Player {
     // forward (toward -Z). Rotate that local vector by yaw about the Y axis:
     //   forward(-Z) world dir = (-sin yaw, -cos yaw)
     //   right(+X)   world dir = ( cos yaw, -sin yaw)
+    // Rotating a local vector v about +Y by yaw gives
+    //     world = (vx*cos + vz*sin,  -vx*sin + vz*cos)
+    // Substituting v = (0,-1) reproduces the forward vector above, and
+    // v = (1,0) the right vector. The z terms previously carried the wrong
+    // sign, which negated forward/back (W walked backwards) while leaving
+    // strafing correct — the asymmetry that made it look like a key mapping
+    // problem rather than a vector maths one.
     const axis = input.moveAxis ? input.moveAxis() : { x: 0, z: 0 };
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
-    let wishX = axis.x * cy - axis.z * sy;
-    let wishZ = -axis.x * sy - axis.z * cy;
+    let wishX = axis.x * cy + axis.z * sy;
+    let wishZ = -axis.x * sy + axis.z * cy;
 
     const wishLen = Math.hypot(wishX, wishZ);
     if (wishLen > 1e-4) { wishX /= wishLen; wishZ /= wishLen; }

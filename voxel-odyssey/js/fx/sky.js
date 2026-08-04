@@ -179,8 +179,12 @@ export class Sky {
     // the group, which itself follows the camera, so no per-frame billboarding
     // math is required — a camera-facing plane is good enough at this scale).
     const sunGeo = new THREE.CircleGeometry(26, 24);
+    // depthTest MUST be on. These are drawn in the transparent pass, i.e.
+    // AFTER opaque terrain, so the depth buffer already holds the terrain in
+    // front of them; without the test they simply paint over mountains and
+    // walls. depthWrite stays off so they never occlude each other or water.
     const sunMat = new THREE.MeshBasicMaterial({
-      color: 0xfff3c4, fog: false, depthWrite: false, depthTest: false,
+      color: 0xfff3c4, fog: false, depthWrite: false, depthTest: true,
       transparent: true, opacity: 1,
     });
     this.sunMat = sunMat;
@@ -191,7 +195,7 @@ export class Sky {
     // A soft glow halo around the sun.
     const glowGeo = new THREE.CircleGeometry(46, 24);
     const glowMat = new THREE.MeshBasicMaterial({
-      color: 0xffe9a0, fog: false, depthWrite: false, depthTest: false,
+      color: 0xffe9a0, fog: false, depthWrite: false, depthTest: true,
       transparent: true, opacity: 0.28,
     });
     this.sunGlowMat = glowMat;
@@ -202,7 +206,7 @@ export class Sky {
 
     const moonGeo = new THREE.CircleGeometry(20, 24);
     const moonMat = new THREE.MeshBasicMaterial({
-      color: 0xeef0ff, fog: false, depthWrite: false, depthTest: false,
+      color: 0xeef0ff, fog: false, depthWrite: false, depthTest: true,
       transparent: true, opacity: 1,
     });
     this.moonMat = moonMat;
@@ -259,7 +263,10 @@ export class Sky {
       opacity: 0,             // faded in at night
       fog: false,
       depthWrite: false,
-      depthTest: false,
+      // Stars are occluded by terrain for the same reason the sun is: they
+      // are drawn after opaque geometry, so without the test a mountain at
+      // night has a starfield painted across it.
+      depthTest: true,
     });
     this.stars = new THREE.Points(geo, this.starMat);
     this.stars.frustumCulled = false;
@@ -280,6 +287,7 @@ export class Sky {
       transparent: true,
       opacity: 0.55,
       depthWrite: false,
+      depthTest: true,       // a hill in front of a cloud must hide it
       fog: true,             // clouds DO catch fog so they fade with distance
       side: THREE.DoubleSide,
     });

@@ -15,6 +15,11 @@
    Codes are KeyboardEvent.code values ('KeyW', 'Space', 'ShiftLeft', ...).
    ========================================================================= */
 
+// How many consecutive pointer-lock refusals before we stop asking. Chrome's
+// post-Escape cooldown produces one or two; a genuinely unsupported embedding
+// produces them forever.
+const MAX_LOCK_FAILURES = 4;
+
 export const DEFAULT_BINDINGS = {
   forward: ['KeyW', 'ArrowUp'],
   back: ['KeyS', 'ArrowDown'],
@@ -58,7 +63,17 @@ export class Input {
     // the Pointer Lock API. `virtualLock` is our fallback: we hide the cursor
     // and steer with raw mousemove deltas instead, so looking around still works.
     this.virtualLock = false;
-    this._lockUnavailable = false;
+    // Consecutive pointer-lock refusals. Reset on any successful lock, so a
+    // temporary refusal never permanently disables real mouse look.
+    this._lockFailures = 0;
+    this._lockRetry = null;
+
+    // Edge-turn state for the fallback: without pointer lock the cursor stops
+    // at the window border, so looking is capped by screen width. Steering
+    // continues while the pointer rests near an edge.
+    this._edgeTurn = 0;
+    this._pointerX = 0;
+    this._pointerY = 0;
 
     this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
 
@@ -111,6 +126,8 @@ export class Input {
       this._buttonReleased.add(e.button);
     };
     this._onMouseMove = (e) => {
+      this._pointerX = e.clientX;
+      this._pointerY = e.clientY;
       if (this.locked) {
         this.mouseDX += e.movementX || 0;
         this.mouseDY += e.movementY || 0;
@@ -122,10 +139,20 @@ export class Input {
     };
     this._onContext = (e) => e.preventDefault();
     this._onPointerLockChange = () => {
-      if (this.virtualLock) return;   // the real API isn't the one steering us
-      this._setLocked(document.pointerLockElement === this.canvas);
+      const real = document.pointerLockElement === this.canvas;
+      if (real) {
+        // Real lock is working — leave the fallback and forget past failures.
+        this._lockFailures = 0;
+        if (this.virtualLock) {
+          this.virtualLock = false;
+          this.canvas.classList.remove('virtual-lock');
+        }
+      } else if (this.virtualLock) {
+        return;   // the real API isn't the one steering us
+      }
+      this._setLocked(real);
     };
-    this._onPointerLockError = () => this._useVirtualLock();
+    this._onPointerLockError = () => this._onLockFailed();
 
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
@@ -161,27 +188,51 @@ export class Input {
   }
 
   // Fall back to cursor-hidden mousemove steering when real pointer lock is
-  // denied. Once denied we stop asking, so we don't spam failing requests.
+  // denied, so the player can still look around. This is a fallback, not a
+  // verdict: requestLock keeps retrying the real API.
   _useVirtualLock() {
-    this._lockUnavailable = true;
     this.virtualLock = true;
     this.canvas.classList.add('virtual-lock');
     this._setLocked(true);
   }
 
   requestLock() {
-    if (this._lockUnavailable || !this.canvas.requestPointerLock) {
-      this._useVirtualLock();
-      return;
-    }
+    if (!this.canvas.requestPointerLock) { this._useVirtualLock(); return; }
+
+    // Browsers rate-limit pointer lock: re-requesting within about a second of
+    // an Escape-driven exit fails with pointerlockerror even though the API is
+    // perfectly available. Treating that transient refusal as "unsupported"
+    // permanently downgraded the whole session to cursor-bound look, which is
+    // what made looking around feel restricted after the first pause.
+    // Only give up after several consecutive failures, and recover the moment
+    // a real lock succeeds.
+    if (this._lockFailures >= MAX_LOCK_FAILURES) { this._useVirtualLock(); return; }
+
     let p;
     try {
       p = this.canvas.requestPointerLock();
     } catch (e) {
-      this._useVirtualLock();
+      this._onLockFailed();
       return;
     }
-    if (p && typeof p.catch === 'function') p.catch(() => this._useVirtualLock());
+    if (p && typeof p.catch === 'function') p.catch(() => this._onLockFailed());
+  }
+
+  _onLockFailed() {
+    this._lockFailures++;
+    // Fall back for now so the player can still look around, but keep trying
+    // the real API on subsequent clicks.
+    this._useVirtualLock();
+    // A refusal caused by the browser's cooldown clears on its own; schedule a
+    // retry rather than waiting for another click.
+    if (this._lockRetry) clearTimeout(this._lockRetry);
+    this._lockRetry = setTimeout(() => {
+      this._lockRetry = null;
+      if (this.virtualLock && this.state && this.state.flags && this.state.flags.mode === 'play'
+        && !this.state.flags.paused && !this.state.flags.inventoryOpen) {
+        this.requestLock();
+      }
+    }, 1200);
   }
 
   exitLock() {
@@ -311,6 +362,35 @@ export class Input {
   // Standard-layout button indices, named so callers read clearly.
   padDown(button) { return this.gamepad.buttons.has(button); }
   padPressed(button) { return this.gamepad.buttons.has(button) && !this.gamepad._prevButtons.has(button); }
+
+  /* Extra turn rate contributed by the pointer resting near a window edge.
+     Only used in the fallback: with real pointer lock the cursor is captured
+     and can never reach an edge, but without it the cursor stops at the
+     border and you simply cannot turn any further. Pushing against the edge
+     keeps turning, which restores unlimited rotation.
+     Returns radians/sec (x = yaw, y = pitch). */
+  edgeTurn() {
+    if (!this.virtualLock || !this.locked) return { x: 0, y: 0 };
+    if (typeof window === 'undefined') return { x: 0, y: 0 };
+
+    const w = window.innerWidth, h = window.innerHeight;
+    const margin = Math.max(40, Math.min(140, w * 0.08));
+    const ramp = (dist) => {
+      // 0 at the margin's inner edge, 1 hard against the border.
+      if (dist >= margin) return 0;
+      const t = 1 - dist / margin;
+      return t * t;   // eased, so drifting near the edge doesn't yank the view
+    };
+
+    let x = 0, y = 0;
+    x -= ramp(this._pointerX);
+    x += ramp(w - this._pointerX);
+    y -= ramp(this._pointerY);
+    y += ramp(h - this._pointerY);
+
+    const SPEED = 2.4;
+    return { x: x * SPEED, y: y * SPEED };
+  }
 
   /* Smoothed look delta for this frame. Smoothing is an exponential blend
      toward the raw delta; at 0 it returns the raw value unchanged so the
