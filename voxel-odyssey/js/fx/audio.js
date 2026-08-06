@@ -194,6 +194,36 @@ export class AudioSystem {
   /*  Public SFX entry point                                               */
   /* ---------------------------------------------------------------------- */
 
+  /* Ambient rain bed: looping filtered noise, gain driven by the weather
+     system each frame. Created lazily on first use (needs the ctx, which only
+     exists after the first user gesture) and never torn down — a zero-gain
+     looping source costs effectively nothing. */
+  setAmbientRain(level) {
+    if (!this.ctx || !this.sfxBus) { this._pendingRain = level; return; }
+    if (!this._rainGain) {
+      const ctx = this.ctx;
+      // 2s of white noise; looped, it reads as steady rain once lowpassed.
+      const len = ctx.sampleRate * 2;
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 900;      // hiss -> patter
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      src.connect(filter).connect(gain).connect(this.sfxBus);
+      src.start();
+      this._rainGain = gain;
+    }
+    const target = Math.max(0, Math.min(1, level)) * 0.14;
+    // Smoothed so showers fade in rather than switching on.
+    this._rainGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.6);
+  }
+
   // play(name, opts) — synthesize and fire a one-shot sound effect.
   // No-ops safely if the context isn't ready or the name is unknown.
   play(name, opts = {}) {

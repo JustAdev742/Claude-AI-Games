@@ -175,9 +175,18 @@ export class Weather {
     this.intensity += (wantIntensity - this.intensity) * Math.min(1, dt * 0.6);
     this.material.opacity = this.intensity * (effective === WEATHER.SNOW ? 0.85 : 0.55);
     this.points.visible = this.material.opacity > 0.01;
-    if (!this.points.visible) return;
+    if (!this.points.visible) {
+      const audio2 = this.game && this.game.audio;
+      if (audio2 && typeof audio2.setAmbientRain === 'function') audio2.setAmbientRain(0);
+      return;
+    }
 
     const snow = effective === WEATHER.SNOW;
+    // Rain is audible; snow falls silently (a quiet bed sells the cold).
+    const audio = this.game && this.game.audio;
+    if (audio && typeof audio.setAmbientRain === 'function') {
+      audio.setAmbientRain(snow ? 0 : this.intensity);
+    }
     this.material.color.setHex(snow ? 0xffffff : 0x9fc2e8);
     this.material.size = snow ? 0.16 : 0.1;
 

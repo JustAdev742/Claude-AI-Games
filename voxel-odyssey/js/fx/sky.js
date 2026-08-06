@@ -535,8 +535,14 @@ export class Sky {
       engine.setFogColor(_tmpColor);
       // Widen view by day, tighten a little at night for mood + performance.
       if (typeof engine.setFogRange === 'function') {
-        const near = lerp(28, 44, p.light);
-        const far = lerp(150, 260, p.light);
+        let near = lerp(28, 44, p.light);
+        let far = lerp(150, 260, p.light);
+        // Rain closes the horizon in. Driven by the eased weather intensity,
+        // so a shower rolls the fog in over seconds rather than snapping it.
+        const weather = this.game && this.game.weather;
+        const wet = weather ? weather.intensity : 0;
+        near *= 1 - 0.35 * wet;
+        far *= 1 - 0.45 * wet;
         engine.setFogRange(near, far);
       }
     } else if (scene) {

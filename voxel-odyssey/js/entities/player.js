@@ -132,6 +132,7 @@ export class Player {
   /* ---- lifecycle ------------------------------------------------------- */
 
   init() {
+    this._buildHighlight();
     // Keep the held-item viewmodel in sync with the selected hotbar slot.
     const ev = this.game.events;
     if (ev) {
@@ -986,6 +987,7 @@ export class Player {
 
     // Update the held-item viewmodel transform / swing.
     this._updateViewmodel(dt);
+    this._updateHighlight();
 
     // Throttled move event for systems that care.
     this._moveEventTimer -= dt;
@@ -1003,6 +1005,45 @@ export class Player {
     if (this.iframes > 0) this.iframes = Math.max(0, this.iframes - dt);
     // Decay the swing animation back to rest.
     if (this._swing > 0) this._swing = Math.max(0, this._swing - dt * 4);
+  }
+
+  /* ---- target-block highlight ----------------------------------------- */
+
+  /* The thin black outline around the block you are looking at. This is the
+     single strongest "the game understands my aim" cue Minecraft has, and it
+     also carries mining feedback: the outline brightens as mineProgress
+     rises, so progress is visible even before the break particles fire. */
+  _buildHighlight() {
+    const scene = this.game.scene;
+    if (!scene || this._highlight) return;
+    // Slightly inflated so the lines never z-fight the block faces.
+    const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004));
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x0a0a0a,
+      transparent: true,
+      opacity: 0.85,
+      // Draw after opaque terrain; depth test ON so walls hide it.
+      depthWrite: false,
+    });
+    this._highlight = new THREE.LineSegments(geo, mat);
+    this._highlight.visible = false;
+    this._highlight.renderOrder = 2;
+    this._highlight.frustumCulled = false;
+    scene.add(this._highlight);
+  }
+
+  _updateHighlight() {
+    const h = this._highlight;
+    if (!h) return;
+    const t = this._lastTarget;
+    const show = !!t && this.game.mode === 'play' && !this.dead;
+    h.visible = show;
+    if (!show) return;
+    h.position.set(t.block.x + 0.5, t.block.y + 0.5, t.block.z + 0.5);
+    // Mining feedback: fade the line toward white as progress accumulates.
+    const p = this.mineProgress || 0;
+    h.material.color.setScalar(0.04 + p * 0.9);
+    h.material.opacity = 0.85 + 0.15 * p;
   }
 
   /* ---- viewmodel (held item in front of the camera) ------------------- */

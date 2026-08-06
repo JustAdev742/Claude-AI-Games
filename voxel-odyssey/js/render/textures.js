@@ -551,6 +551,33 @@ export function requiredTextureNames() {
  * Generate the full built-in texture set.
  * @returns {object} textureName -> canvas
  */
+/* Water animates. Four phase-shifted frames stacked vertically — exactly the
+   sheet format Minecraft resource packs use, so the atlas's existing
+   animation path (built for packs) drives the built-in water too. The bands
+   scroll by a quarter tile per frame, making the 4-frame cycle seamless. */
+function buildWaterStrip(s) {
+  const strip = makeCanvas(s, s * 4);
+  const ctx = strip.getContext('2d');
+  for (let f = 0; f < 4; f++) {
+    const t = new Tile(s, 'water#' + f);
+    const c = baseColor('water');
+    t.mottle(c, 0.06, 255);
+    const shift = (f / 4) * s;
+    for (let y = 0; y < s; y++) {
+      const w = Math.sin(((y + shift) / s) * Math.PI * 4) * 0.10;
+      for (let x = 0; x < s; x++) {
+        const p2 = t.get(x, y);
+        const sparkle = Math.sin(((x * 1.7 + y + shift * 2) / s) * Math.PI * 2) > 0.86 ? 0.12 : 0;
+        t.set(x, y, p2[0] * (1 + w + sparkle), p2[1] * (1 + w + sparkle), p2[2] * (1 + w + sparkle * 2), 255);
+      }
+    }
+    const img = ctx.createImageData(s, s);
+    img.data.set(t.data);
+    ctx.putImageData(img, 0, f * s);
+  }
+  return strip;
+}
+
 export function generateDefaultTextures(tileSize = 16) {
   const out = {};
   for (const name of requiredTextureNames()) {
@@ -565,6 +592,8 @@ export function generateDefaultTextures(tileSize = 16) {
     }
     out[name] = t.toCanvas();
   }
+  // Frame-animated overrides (same {image, frames, meta} shape a pack yields).
+  out.water = { image: buildWaterStrip(tileSize), frames: 4, meta: { frametime: 10 } };
   return out;
 }
 
