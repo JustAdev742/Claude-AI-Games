@@ -574,7 +574,7 @@ export class HUD {
 
     let biome = '—';
     if (worldgen && typeof worldgen.biomeAt === 'function') {
-      try { biome = worldgen.biomeAt(x, z) || '—'; } catch (_) { biome = '—'; }
+      try { biome = prettyBiome(worldgen.biomeAt(x, z)); } catch (_) { biome = '—'; }
     }
 
     const t = sky && typeof sky.timeOfDay === 'number' ? sky.timeOfDay : 0.5;
@@ -617,7 +617,7 @@ export class HUD {
 
     let biome = '—';
     if (worldgen && typeof worldgen.biomeAt === 'function') {
-      try { biome = worldgen.biomeAt(Math.floor(x), Math.floor(z)) || '—'; } catch (_) {}
+      try { biome = prettyBiome(worldgen.biomeAt(Math.floor(x), Math.floor(z))); } catch (_) {}
     }
 
     let mobCount = 0, itemCount = 0;
@@ -700,3 +700,10 @@ export class HUD {
 }
 
 export default HUD;
+
+
+/* 'snowy_plains' -> 'Snowy Plains' for display. */
+function prettyBiome(name) {
+  if (!name) return '—';
+  return String(name).split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}

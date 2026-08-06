@@ -136,8 +136,8 @@ export class Weather {
       const b = wg.biomeAt(Math.floor(p.position.x), Math.floor(p.position.z));
       if (!b) return 0.5;
       if (typeof b.temperature === 'number') return b.temperature;
-      // Fall back to matching on the biome's name.
-      const name = String(b.name || b.key || '').toLowerCase();
+      // biomeAt returns a plain string; match on it directly.
+      const name = String(typeof b === 'string' ? b : (b.name || b.key || '')).toLowerCase();
       if (/snow|tundra|ice|frozen|peak/.test(name)) return 0.05;
       if (/desert|badland|savanna/.test(name)) return 0.95;
       return 0.5;

@@ -33308,11 +33308,258 @@ var Noise = class {
   }
 };
 
+// js/world/climate.js
+var Spline = class {
+  constructor(points) {
+    this.points = points;
+  }
+  at(x) {
+    const p = this.points;
+    if (x <= p[0][0]) return p[0][1];
+    const last = p.length - 1;
+    if (x >= p[last][0]) return p[last][1];
+    for (let i = 0; i < last; i++) {
+      const [x0, y0] = p[i];
+      const [x1, y1] = p[i + 1];
+      if (x > x1) continue;
+      const span = x1 - x0;
+      if (span <= 1e-9) return y1;
+      const t = (x - x0) / span;
+      const s = t * t * (3 - 2 * t);
+      return y0 + (y1 - y0) * s;
+    }
+    return p[last][1];
+  }
+};
+var SEA_LEVEL = 28;
+var OFFSET_SPLINE = new Spline([
+  [-1, SEA_LEVEL - 20],
+  // deep ocean
+  [-0.6, SEA_LEVEL - 14],
+  // ocean floor
+  [-0.45, SEA_LEVEL - 10],
+  // shelf
+  [-0.2, SEA_LEVEL - 3],
+  // shallows
+  [-0.05, SEA_LEVEL + 1],
+  // shoreline
+  [0.1, SEA_LEVEL + 4],
+  // coastal plain
+  [0.35, SEA_LEVEL + 8],
+  // lowland
+  [0.65, SEA_LEVEL + 13],
+  // inland
+  [1, SEA_LEVEL + 18]
+  // far inland plateau
+]);
+var FACTOR_SPLINE = new Spline([
+  [-1, 34],
+  // barely eroded: alpine, dramatic relief
+  [-0.7, 26],
+  [-0.35, 16],
+  // hills
+  [0, 9],
+  // gentle rolling
+  [0.35, 3],
+  // plateau / flatland band
+  [0.6, 7],
+  // some relief returns
+  [1, 2]
+  // heavily eroded: flat
+]);
+var PEAK_SHARPNESS = 1.15;
+var SALT = {
+  continent: 101,
+  erosion: 211,
+  weird: 307,
+  temp: 401,
+  humid: 503,
+  river: 601,
+  detail: 709,
+  cave: 811,
+  cheese: 907,
+  ore: 1009,
+  decor: 1103
+};
+var Climate = class {
+  constructor(seed = 0) {
+    this.setSeed(seed);
+    this._cache = /* @__PURE__ */ new Map();
+    this._cacheLimit = 24e3;
+  }
+  setSeed(seed) {
+    this.seed = seed | 0;
+    const n = (salt) => new Noise((this.seed ^ salt * 2654435761) >>> 0);
+    this.nContinent = n(SALT.continent);
+    this.nErosion = n(SALT.erosion);
+    this.nWeird = n(SALT.weird);
+    this.nTemp = n(SALT.temp);
+    this.nHumid = n(SALT.humid);
+    this.nRiver = n(SALT.river);
+    this.nDetail = n(SALT.detail);
+    this.nCave = n(SALT.cave);
+    this.nCheese = n(SALT.cheese);
+    this.nOre = n(SALT.ore);
+    this.nDecor = n(SALT.decor);
+    if (this._cache) this._cache.clear();
+  }
+  /* ---- raw fields, all in roughly [-1, 1] ---------------------------- */
+  // Frequencies set the SCALE of the world. Continentalness at 0.0009 gives
+  // landmasses on the order of a thousand blocks, which is what makes biomes
+  // feel large; the old generator's 0.0028 produced features every ~250
+  // blocks, so you crossed three biomes on a short walk.
+  continentalness(x, z) {
+    return this.nContinent.fbm2(x, z, 4, 9e-4, 2, 0.5);
+  }
+  erosion(x, z) {
+    return this.nErosion.fbm2(x, z, 4, 16e-4, 2, 0.5);
+  }
+  weirdness(x, z) {
+    return this.nWeird.fbm2(x, z, 4, 35e-4, 2, 0.5);
+  }
+  temperature(x, z) {
+    return this.nTemp.fbm2(x, z, 3, 11e-4, 2, 0.5);
+  }
+  humidity(x, z) {
+    return this.nHumid.fbm2(x, z, 3, 14e-4, 2, 0.5);
+  }
+  /* Peaks & valleys, derived from weirdness rather than being its own noise.
+     Folding it this way means a region's "weird" character and its relief are
+     linked — ridges land on the same features that drive biome variants, so
+     mountain ranges line up with the terrain instead of cross-hatching it. */
+  peaksValleys(weird) {
+    const folded = 1 - Math.abs(3 * Math.abs(weird) - 2);
+    return clamp2(folded, -1, 1);
+  }
+  /* River field: 0 at the channel centre, 1 far away.
+     Using 1-|noise| makes the zero-crossing of a smooth field into a
+     continuous winding line, which is why rivers connect and meander instead
+     of appearing as disconnected puddles. */
+  riverStrength(x, z) {
+    const n = this.nRiver.fbm2(x, z, 3, 21e-4, 2, 0.5);
+    return Math.abs(n);
+  }
+  /* ---- combined column sample ---------------------------------------- */
+  /**
+   * Everything about a column, cached.
+   * @returns {{continent,erosion,weird,peaks,temp,humid,river,height,biome}}
+   */
+  sample(x, z) {
+    const key = `${x},${z}`;
+    const hit = this._cache.get(key);
+    if (hit) return hit;
+    const continent = this.continentalness(x, z);
+    const erosion = this.erosion(x, z);
+    const weird = this.weirdness(x, z);
+    const peaks = this.peaksValleys(weird);
+    const temp = this.temperature(x, z);
+    const humid = this.humidity(x, z);
+    const river = this.riverStrength(x, z);
+    const height = this._shapeHeight(x, z, continent, erosion, peaks, river);
+    const out = {
+      continent,
+      erosion,
+      weird,
+      peaks,
+      temp,
+      humid,
+      river,
+      height,
+      biome: null
+      // filled by the caller's biome table
+    };
+    if (this._cache.size >= this._cacheLimit) this._cache.clear();
+    this._cache.set(key, out);
+    return out;
+  }
+  /* The spline combination described in the file header, plus rivers. */
+  _shapeHeight(x, z, continent, erosion, peaks, river) {
+    const offset = OFFSET_SPLINE.at(continent);
+    const factor = FACTOR_SPLINE.at(erosion);
+    const sign2 = peaks < 0 ? -1 : 1;
+    const shaped2 = sign2 * Math.pow(Math.abs(peaks), PEAK_SHARPNESS);
+    let h = offset + shaped2 * factor;
+    const detail = this.nDetail.fbm2(x, z, 3, 0.031, 2.2, 0.5);
+    h += detail * Math.min(3, factor * 0.12);
+    if (h > SEA_LEVEL - 2) {
+      const RIVER_W = 0.055;
+      if (river < RIVER_W) {
+        const t = 1 - river / RIVER_W;
+        const carve = t * t * (3 - 2 * t);
+        const altitudeFade = clamp2(1 - (h - SEA_LEVEL) / 45, 0.15, 1);
+        const target = SEA_LEVEL - 2;
+        h = h + (target - h) * carve * altitudeFade;
+      }
+    }
+    return clamp2(Math.round(h), 1, 74);
+  }
+  clearCache() {
+    this._cache.clear();
+  }
+};
+var BIOME_TABLE = [
+  // --- oceanic -------------------------------------------------------
+  { name: "deep_ocean", continent: [-1, -0.55], temp: [-1, 1], humid: [-1, 1], erosion: [-1, 1] },
+  { name: "ocean", continent: [-0.55, -0.22], temp: [-1, 0.6], humid: [-1, 1], erosion: [-1, 1] },
+  { name: "frozen_ocean", continent: [-0.55, -0.22], temp: [-1, -0.55], humid: [-1, 1], erosion: [-1, 1] },
+  { name: "beach", continent: [-0.22, -0.02], temp: [-0.5, 1], humid: [-1, 1], erosion: [-1, 1] },
+  { name: "snowy_beach", continent: [-0.22, -0.02], temp: [-1, -0.5], humid: [-1, 1], erosion: [-1, 1] },
+  // --- hot & dry -----------------------------------------------------
+  { name: "desert", continent: [-0.02, 1], temp: [0.45, 1], humid: [-1, -0.25], erosion: [-0.2, 1] },
+  { name: "savanna", continent: [-0.02, 1], temp: [0.3, 0.85], humid: [-0.25, 0.2], erosion: [0, 1] },
+  { name: "badlands", continent: [-0.02, 1], temp: [0.55, 1], humid: [-1, -0.4], erosion: [-1, -0.2] },
+  // --- temperate -----------------------------------------------------
+  { name: "plains", continent: [-0.02, 1], temp: [-0.3, 0.45], humid: [-0.4, 0.25], erosion: [0.1, 1] },
+  { name: "forest", continent: [-0.02, 1], temp: [-0.25, 0.4], humid: [0.15, 0.7], erosion: [-0.4, 1] },
+  { name: "birch_forest", continent: [-0.02, 1], temp: [-0.1, 0.25], humid: [0.3, 0.7], erosion: [-0.2, 0.6] },
+  { name: "swamp", continent: [-0.02, 0.5], temp: [0, 0.5], humid: [0.6, 1], erosion: [0.4, 1] },
+  { name: "jungle", continent: [-0.02, 1], temp: [0.4, 0.9], humid: [0.55, 1], erosion: [-0.3, 0.8] },
+  // --- cold ----------------------------------------------------------
+  { name: "taiga", continent: [-0.02, 1], temp: [-0.7, -0.2], humid: [0, 0.7], erosion: [-0.4, 1] },
+  { name: "snowy_plains", continent: [-0.02, 1], temp: [-1, -0.5], humid: [-1, 0.3], erosion: [0, 1] },
+  { name: "snowy_taiga", continent: [-0.02, 1], temp: [-1, -0.55], humid: [0.2, 1], erosion: [-0.4, 1] },
+  // --- high relief (low erosion). These are reachable at any temperature,
+  //     so a mountain range crosses climate zones as a real one does.
+  { name: "mountains", continent: [0.1, 1], temp: [-0.5, 0.6], humid: [-1, 1], erosion: [-1, -0.5] },
+  { name: "snowy_mountains", continent: [0.1, 1], temp: [-1, -0.35], humid: [-1, 1], erosion: [-1, -0.4] },
+  { name: "stony_peaks", continent: [0.3, 1], temp: [0.2, 1], humid: [-1, 1], erosion: [-1, -0.65] }
+];
+function selectBiome(sample) {
+  const axes = [
+    ["continent", sample.continent],
+    ["temp", sample.temp],
+    ["humid", sample.humid],
+    ["erosion", sample.erosion]
+  ];
+  let best = null;
+  let bestD = Infinity;
+  for (const entry of BIOME_TABLE) {
+    let d = 0;
+    for (const [axis, value] of axes) {
+      const range = entry[axis];
+      if (!range) continue;
+      if (value < range[0]) {
+        const e = range[0] - value;
+        d += e * e;
+      } else if (value > range[1]) {
+        const e = value - range[1];
+        d += e * e;
+      }
+    }
+    if (d < bestD) {
+      bestD = d;
+      best = entry;
+    }
+    if (d === 0) break;
+  }
+  return best ? best.name : "plains";
+}
+
 // js/world/worldgen.js
 var SEA = WATER_LEVEL;
 var MAX_Y = CHUNK_SY - 1;
 var BEDROCK_TOP = 2;
-var SALT = {
+var SALT2 = {
   height: 1013,
   detail: 2027,
   temp: 3037,
@@ -33323,16 +33570,27 @@ var SALT = {
   decor: 8123,
   hill: 9137
 };
-var BIOMES = {
-  ocean: { base: SEA - 7, amp: 4, ridged: 0, rough: 0.4, surface: ID.SAND, sub: ID.DIRT, beach: false },
-  beach: { base: SEA + 1, amp: 2, ridged: 0, rough: 0.3, surface: ID.SAND, sub: ID.SAND, beach: true },
-  plains: { base: SEA + 4, amp: 5, ridged: 0, rough: 0.5, surface: ID.GRASS, sub: ID.DIRT, beach: true },
-  forest: { base: SEA + 5, amp: 7, ridged: 0.15, rough: 0.7, surface: ID.GRASS, sub: ID.DIRT, beach: true },
-  desert: { base: SEA + 3, amp: 6, ridged: 0.05, rough: 0.6, surface: ID.SAND, sub: ID.SANDSTONE, beach: false },
-  mountains: { base: SEA + 12, amp: 10, ridged: 1, rough: 1, surface: ID.STONE, sub: ID.STONE, beach: false },
-  snow: { base: SEA + 14, amp: 9, ridged: 0.85, rough: 0.9, surface: ID.SNOW, sub: ID.DIRT, beach: false }
+var SURFACES = {
+  deep_ocean: { surface: ID.GRAVEL, sub: ID.DIRT, beach: false },
+  ocean: { surface: ID.SAND, sub: ID.DIRT, beach: false },
+  frozen_ocean: { surface: ID.SAND, sub: ID.DIRT, beach: false, frozen: true },
+  beach: { surface: ID.SAND, sub: ID.SAND, beach: false },
+  snowy_beach: { surface: ID.SAND, sub: ID.SAND, beach: false, frozen: true },
+  desert: { surface: ID.SAND, sub: ID.SANDSTONE, beach: false },
+  badlands: { surface: ID.SANDSTONE, sub: ID.SANDSTONE, beach: false },
+  savanna: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  plains: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  forest: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  birch_forest: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  swamp: { surface: ID.GRASS, sub: ID.DIRT, beach: false },
+  jungle: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  taiga: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  snowy_plains: { surface: ID.SNOW, sub: ID.DIRT, beach: false, frozen: true },
+  snowy_taiga: { surface: ID.SNOW, sub: ID.DIRT, beach: false, frozen: true },
+  mountains: { surface: ID.GRASS, sub: ID.DIRT, beach: false, alpine: true },
+  snowy_mountains: { surface: ID.SNOW, sub: ID.STONE, beach: false, alpine: true, frozen: true },
+  stony_peaks: { surface: ID.STONE, sub: ID.STONE, beach: false, alpine: true }
 };
-var RIDGE_HEIGHT = 26;
 function isDecoration(id) {
   return id === ID.TALL_GRASS || id === ID.FLOWER_RED || id === ID.FLOWER_YELLOW || id === ID.MUSHROOM_RED || id === ID.TORCH;
 }
@@ -33340,13 +33598,8 @@ var WorldGen = class {
   constructor(game) {
     this.game = game;
     this.seed = (game && game.seed) | 0 || 1337;
-    this.heightNoise = null;
-    this.detailNoise = null;
-    this.tempNoise = null;
-    this.moistNoise = null;
-    this.ridgeNoise = null;
+    this.climate = null;
     this.caveNoise = null;
-    this.hillNoise = null;
     this._colCache = /* @__PURE__ */ new Map();
     this._colCacheSeed = -1;
     this.setSeed(this.seed);
@@ -33354,13 +33607,8 @@ var WorldGen = class {
   /* --- seeding ---------------------------------------------------------- */
   setSeed(seed) {
     this.seed = (seed | 0) >>> 0;
-    this.heightNoise = new Noise(hashCombine(this.seed, SALT.height));
-    this.detailNoise = new Noise(hashCombine(this.seed, SALT.detail));
-    this.tempNoise = new Noise(hashCombine(this.seed, SALT.temp));
-    this.moistNoise = new Noise(hashCombine(this.seed, SALT.moist));
-    this.ridgeNoise = new Noise(hashCombine(this.seed, SALT.ridge));
-    this.caveNoise = new Noise(hashCombine(this.seed, SALT.cave));
-    this.hillNoise = new Noise(hashCombine(this.seed, SALT.hill));
+    this.climate = new Climate(this.seed);
+    this.caveNoise = new Noise(hashCombine(this.seed, SALT2.cave));
     this._colCache.clear();
     this._colCacheSeed = this.seed;
     return this;
@@ -33371,54 +33619,19 @@ var WorldGen = class {
     }
     return this;
   }
-  /* --- climate + biome selection --------------------------------------- */
-  // Temperature/moisture fields, both in [0,1]. Large features so biomes form
-  // coherent regions rather than per-block noise.
-  /* Climate frequencies set how BIG biomes are. These were 0.0042/0.0051,
-       which puts a full noise period every ~200 blocks — small enough that a
-       desert threshold is crossed in isolated speckles rather than over a
-       region, producing the scattered sand patches in the middle of grassland.
-       At ~0.0011 a period spans roughly 900 blocks, so a desert forms as one
-       coherent area you walk into and out of.
-  
-       fbm output is bell-distributed around 0, not uniform, so the raw range is
-       effectively about [-0.8, 0.8] with most samples near the middle. The
-       0.5 + 0.5*t remap therefore concentrates values around 0.5, which the
-       thresholds below account for. */
-  _temperature(wx, wz) {
-    const t = this.tempNoise.fbm2(wx, wz, 3, 11e-4, 2, 0.5);
-    return clamp2(0.5 + 0.62 * t, 0, 1);
-  }
-  _moisture(wx, wz) {
-    const m = this.moistNoise.fbm2(wx, wz, 3, 13e-4, 2, 0.5);
-    return clamp2(0.5 + 0.62 * m, 0, 1);
-  }
-  // A separate low-frequency "continent" field decides land vs. ocean so that
-  // oceans appear as large basins instead of wherever height happens to dip.
-  _continent(wx, wz) {
-    return this.heightNoise.fbm2(wx, wz, 4, 11e-4, 2, 0.5);
-  }
-  // Choose a biome string from climate + elevation signal.
-  _classify(temperature, moisture, continent) {
-    if (continent < -0.34) return "ocean";
-    if (continent > 0.42) {
-      return temperature < 0.32 ? "snow" : "mountains";
-    }
-    if (continent < -0.24) return "beach";
-    if (temperature > 0.74 && moisture < 0.3) return "desert";
-    if (temperature < 0.22) return "snow";
-    if (moisture > 0.62) return "forest";
-    return "plains";
-  }
+  /* --- public column queries -------------------------------------------- */
+  // Biome name at a world column ('plains', 'snowy_taiga', ...). A string,
+  // because the HUD prints it and the weather system matches on it.
   biomeAt(wx, wz) {
     return this._column(wx | 0, wz | 0).biome;
   }
+  // Terrain surface height at a world column (top solid block's y).
   heightAt(wx, wz) {
     return this._column(wx | 0, wz | 0).height;
   }
+  // Full descriptor for external callers (spawning, debug overlay).
   columnInfo(wx, wz) {
-    const c = this._column(wx | 0, wz | 0);
-    return { height: c.height, biome: c.biome, temperature: c.temperature, moisture: c.moisture };
+    return this._column(wx | 0, wz | 0);
   }
   /* --- per-column height computation ------------------------------------ */
   // Computes (and caches) the full column descriptor for a world column.
@@ -33430,12 +33643,19 @@ var WorldGen = class {
     const key = wx * 92821 + wz;
     const cached = this._colCache.get(key);
     if (cached !== void 0) return cached;
-    const temperature = this._temperature(wx, wz);
-    const moisture = this._moisture(wx, wz);
-    const continent = this._continent(wx, wz);
-    const biome = this._classify(temperature, moisture, continent);
-    const height = this._computeHeight(wx, wz, biome, continent, temperature, moisture);
-    const info = { height, biome, temperature, moisture, continent };
+    const c = this.climate.sample(wx, wz);
+    const biome = selectBiome(c);
+    const temperature = clamp2(0.5 + 0.62 * c.temp, 0, 1);
+    const moisture = clamp2(0.5 + 0.62 * c.humid, 0, 1);
+    const info = {
+      height: c.height,
+      biome,
+      temperature,
+      moisture,
+      continent: c.continent,
+      erosion: c.erosion,
+      river: c.river
+    };
     if (this._colCache.size > 8192) this._colCache.clear();
     this._colCache.set(key, info);
     return info;
@@ -33456,48 +33676,6 @@ var WorldGen = class {
     }
     return false;
   }
-  _computeHeight(wx, wz, biome, continent, temperature, moisture) {
-    const b = this._blendedParams(wx, wz, biome);
-    const roll = this.hillNoise.fbm2(wx, wz, 4, 0.012, 2, 0.5);
-    const detail = this.detailNoise.fbm2(wx, wz, 3, 0.06, 2.2, 0.5);
-    const ridge = this.ridgeNoise.ridge2(wx, wz, 4, 75e-4);
-    const continentLift = continent * 6;
-    let h = b.base + continentLift;
-    h += roll * b.amp;
-    h += detail * b.amp * 0.35 * b.rough;
-    if (b.ridged > 0) {
-      h += ridge * ridge * RIDGE_HEIGHT * b.ridged;
-    }
-    if (biome === "ocean") h = Math.min(h, SEA - 1);
-    return clamp2(Math.round(h), 1, MAX_Y - 6);
-  }
-  // Average the height parameters (base/amp/ridged/rough) of the biome here and
-  // at four nearby sample points, so the values change gradually across a biome
-  // border rather than snapping. Deterministic (pure climate noise).
-  _blendedParams(wx, wz, primaryBiome) {
-    const R = 6;
-    const offs = [[0, 0], [R, 0], [-R, 0], [0, R], [0, -R]];
-    let base = 0, amp = 0, ridged = 0, rough = 0;
-    for (let i = 0; i < offs.length; i++) {
-      const ox = offs[i][0], oz = offs[i][1];
-      let bio;
-      if (ox === 0 && oz === 0) {
-        bio = primaryBiome;
-      } else {
-        const t = this._temperature(wx + ox, wz + oz);
-        const m = this._moisture(wx + ox, wz + oz);
-        const c = this._continent(wx + ox, wz + oz);
-        bio = this._classify(t, m, c);
-      }
-      const bb = BIOMES[bio] || BIOMES.plains;
-      base += bb.base;
-      amp += bb.amp;
-      ridged += bb.ridged;
-      rough += bb.rough;
-    }
-    const n = offs.length;
-    return { base: base / n, amp: amp / n, ridged: ridged / n, rough: rough / n };
-  }
   /* --- chunk fill ------------------------------------------------------- */
   generateChunk(chunk) {
     if (!chunk || typeof chunk.setLocal !== "function") return;
@@ -33505,7 +33683,7 @@ var WorldGen = class {
     const cz = chunk.cz | 0;
     const baseX = cx * CHUNK_SX;
     const baseZ = cz * CHUNK_SZ;
-    const chunkRng = new RNG(hashCombine(this.seed, cx, cz, SALT.decor));
+    const chunkRng = new RNG(hashCombine(this.seed, cx, cz, SALT2.decor));
     const cols = new Array(CHUNK_SX * CHUNK_SZ);
     for (let lx = 0; lx < CHUNK_SX; lx++) {
       const wx = baseX + lx;
@@ -33516,66 +33694,95 @@ var WorldGen = class {
         this._fillColumn(chunk, lx, lz, wx, wz, info);
       }
     }
-    for (let lx = 0; lx < CHUNK_SX; lx++) {
+    const MARGIN = 3;
+    for (let lx = -MARGIN; lx < CHUNK_SX + MARGIN; lx++) {
       const wx = baseX + lx;
-      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+      for (let lz = -MARGIN; lz < CHUNK_SZ + MARGIN; lz++) {
         const wz = baseZ + lz;
-        const info = cols[lx * CHUNK_SZ + lz];
-        this._decorate(chunk, lx, lz, wx, wz, info, chunkRng);
+        const inChunk = lx >= 0 && lx < CHUNK_SX && lz >= 0 && lz < CHUNK_SZ;
+        const info = inChunk ? cols[lx * CHUNK_SZ + lz] : this._column(wx, wz);
+        this._decorate(chunk, lx, lz, wx, wz, info, chunkRng, inChunk);
       }
     }
     if ("generated" in chunk) chunk.generated = true;
   }
   // Fill a single column: bedrock → stone (with ores/caves) → dirt band →
   // surface block → water up to sea level.
-  _fillColumn(chunk, lx, lz, wx, wz, info) {
+  /* Resolve the surface/sub blocks for a column — shared by chunk fill,
+     the margin decoration pass, and blockAt so they can never disagree. */
+  _surfaceFor(info, wx, wz) {
+    const b = SURFACES[info.biome] || SURFACES.plains;
     const surfaceY = info.height;
-    const biome = info.biome;
-    const b = BIOMES[biome] || BIOMES.plains;
-    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL && this._nearWater(wx, wz);
     let surfaceId = b.surface;
     let subId = b.sub;
+    if (b.alpine && surfaceId !== ID.STONE && surfaceY > SEA + 18) {
+      surfaceId = surfaceY > SEA + 26 ? ID.STONE : b.frozen ? ID.SNOW : ID.STONE;
+      subId = ID.STONE;
+    }
+    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL && this._nearWater(wx, wz);
     if (isShore) {
       surfaceId = ID.SAND;
       subId = ID.SAND;
     }
-    const submerged = surfaceY < SEA;
-    if (submerged && surfaceId === ID.GRASS) {
-      surfaceId = ID.DIRT;
+    if (surfaceY < SEA && surfaceId === ID.GRASS) surfaceId = ID.DIRT;
+    if (surfaceY < SEA && surfaceId === ID.SNOW) surfaceId = ID.DIRT;
+    return { surfaceId, subId, frozen: !!b.frozen };
+  }
+  /* The terrain block at one (wx,y,wz), given the column's resolved surface.
+     This is THE single definition of what the ground is made of: chunk fill
+     iterates it per y, and blockAt() answers a point query with it — so the
+     multiplayer rollback path reconstructs exactly what generation produced. */
+  _terrainBlockAt(info, surf, wx, y, wz) {
+    const surfaceY = info.height;
+    if (y > surfaceY) {
+      if (y <= SEA) {
+        if (y === SEA && (surf.frozen || info.temperature < 0.2)) return ID.ICE;
+        return ID.WATER;
+      }
+      return ID.AIR;
     }
-    const subDepth = surfaceId === ID.SAND ? 4 : 3;
+    if (y <= BEDROCK_TOP) {
+      if (y === 0) return ID.BEDROCK;
+      const r = hashCombine(this.seed, wx, wz, y * 131 + SALT2.height) / 4294967296;
+      return r < 1 - y / (BEDROCK_TOP + 1) ? ID.BEDROCK : ID.STONE;
+    }
+    const subDepth = surf.surfaceId === ID.SAND ? 4 : 3;
+    let id;
+    if (y === surfaceY) id = surf.surfaceId;
+    else if (y >= surfaceY - subDepth) id = surf.subId;
+    else id = ID.STONE;
+    if (id === ID.STONE && y > BEDROCK_TOP) {
+      if (this._isCave(wx, y, wz, surfaceY)) return ID.AIR;
+      id = this._oreFor(wx, y, wz, id);
+    }
+    return id;
+  }
+  /**
+   * Pure point query: the block generation would place at (wx,y,wz), terrain
+   * only (no trees/plants — decorations are cross-column and not needed by
+   * the callers of this API). Used by the multiplayer client to reconstruct
+   * the true block when the server rejects a predicted edit on an unedited
+   * voxel.
+   */
+  blockAt(wx, wy, wz) {
+    wx |= 0;
+    wy |= 0;
+    wz |= 0;
+    if (wy < 0 || wy > MAX_Y) return ID.AIR;
+    const info = this._column(wx, wz);
+    const surf = this._surfaceFor(info, wx, wz);
+    return this._terrainBlockAt(info, surf, wx, wy, wz);
+  }
+  _fillColumn(chunk, lx, lz, wx, wz, info) {
+    const surfaceY = info.height;
+    const surf = this._surfaceFor(info, wx, wz);
     for (let y = 0; y <= surfaceY; y++) {
-      let id;
-      if (y <= BEDROCK_TOP) {
-        if (y === 0) id = ID.BEDROCK;
-        else {
-          const r = hashCombine(this.seed, wx, wz, y * 131 + SALT.height) / 4294967296;
-          id = r < 1 - y / (BEDROCK_TOP + 1) ? ID.BEDROCK : ID.STONE;
-        }
-      } else if (y >= surfaceY - subDepth && y < surfaceY) {
-        id = subId;
-      } else if (y === surfaceY) {
-        id = surfaceId;
-      } else {
-        id = ID.STONE;
-      }
-      if (id === ID.STONE && y > BEDROCK_TOP) {
-        if (this._isCave(wx, y, wz, surfaceY)) {
-          continue;
-        }
-        id = this._oreFor(wx, y, wz, id);
-      }
-      chunk.setLocal(lx, y, lz, id);
-    }
-    if (biome === "snow" && surfaceY > SEA && surfaceId === ID.SNOW) {
+      const id = this._terrainBlockAt(info, surf, wx, y, wz);
+      if (id !== ID.AIR) chunk.setLocal(lx, y, lz, id);
     }
     if (surfaceY < SEA) {
       for (let y = surfaceY + 1; y <= SEA; y++) {
-        if (y === SEA && (biome === "snow" || info.temperature < 0.22)) {
-          chunk.setLocal(lx, y, lz, ID.ICE);
-        } else {
-          chunk.setLocal(lx, y, lz, ID.WATER);
-        }
+        chunk.setLocal(lx, y, lz, this._terrainBlockAt(info, surf, wx, y, wz));
       }
     }
   }
@@ -33597,7 +33804,7 @@ var WorldGen = class {
   _oreFor(wx, y, wz, stoneId) {
     const vein = this.caveNoise.perlin3(wx * 0.12 + 7.3, y * 0.12 + 11.7, wz * 0.12 + 3.1);
     const veinBoost = vein > 0.45 ? 2.4 : vein > 0.2 ? 1.4 : 1;
-    const roll = hashCombine(this.seed, wx, y, wz ^ SALT.ore) / 4294967296;
+    const roll = hashCombine(this.seed, wx, y, wz ^ SALT2.ore) / 4294967296;
     const p = roll;
     if (y >= 3 && y <= 16 && p < 16e-4 * veinBoost) return ID.DIAMOND_ORE;
     if (y >= 3 && y <= 14 && p < 1e-3 * veinBoost) return ID.EMERALD_ORE;
@@ -33609,42 +33816,65 @@ var WorldGen = class {
     return stoneId;
   }
   /* --- decorations ------------------------------------------------------ */
-  _decorate(chunk, lx, lz, wx, wz, info, rng) {
+  _decorate(chunk, lx, lz, wx, wz, info, rng, inChunk = true) {
     const biome = info.biome;
     const surfaceY = info.height;
     if (surfaceY < SEA) return;
     if (surfaceY >= MAX_Y - 8) return;
-    const ground = chunk.getLocal ? chunk.getLocal(lx, surfaceY, lz) : ID.AIR;
-    const above = chunk.getLocal ? chunk.getLocal(lx, surfaceY + 1, lz) : ID.AIR;
+    let ground, above;
+    if (inChunk) {
+      ground = chunk.getLocal ? chunk.getLocal(lx, surfaceY, lz) : ID.AIR;
+      above = chunk.getLocal ? chunk.getLocal(lx, surfaceY + 1, lz) : ID.AIR;
+    } else {
+      ground = this._surfaceFor(info, wx, wz).surfaceId;
+      above = ID.AIR;
+    }
     if (above !== ID.AIR) return;
     const r = mulberryAt(this.seed, wx, wz);
     switch (biome) {
       case "desert":
+      case "badlands":
         this._decorateDesert(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       case "forest":
-        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case "jungle":
+        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
-      case "snow":
-        this._decorateSnow(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case "birch_forest":
+        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
+        break;
+      case "taiga":
+      case "snowy_taiga":
+      case "snowy_plains":
+        this._decorateSnow(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
       case "mountains":
+      case "snowy_mountains":
+      case "stony_peaks":
         this._decorateMountains(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       case "plains":
-        this._decoratePlains(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case "savanna":
+      case "swamp":
+        this._decoratePlains(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
       case "beach":
+      case "snowy_beach":
         this._decorateBeach(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       default:
         break;
     }
   }
-  _decoratePlains(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decoratePlains(chunk, lx, lz, wx, wz, sy, ground, r, biome = "plains") {
     if (ground !== ID.GRASS) return;
     const top = sy + 1;
-    if (r() < 0.012) {
+    const treeP = biome === "savanna" ? 0.02 : 0.012;
+    if (biome === "swamp" && r() < 0.03) {
+      this._setCross(chunk, lx, top, lz, ID.MUSHROOM_RED);
+      return;
+    }
+    if (r() < treeP) {
       this._tree(chunk, lx, lz, top, "oak", r);
     } else if (r() < 0.1) {
       this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
@@ -33654,12 +33884,14 @@ var WorldGen = class {
       this._setSolidOnTop(chunk, lx, top, lz, ID.PUMPKIN);
     }
   }
-  _decorateForest(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decorateForest(chunk, lx, lz, wx, wz, sy, ground, r, biome = "forest") {
     if (ground !== ID.GRASS) return;
     const top = sy + 1;
     const k = r();
-    if (k < 0.085) {
-      this._tree(chunk, lx, lz, top, r() < 0.35 ? "birch" : "oak", r);
+    const density = biome === "jungle" ? 0.13 : 0.085;
+    const birchShare = biome === "birch_forest" ? 0.85 : 0.35;
+    if (k < density) {
+      this._tree(chunk, lx, lz, top, r() < birchShare ? "birch" : "oak", r);
     } else if (k < 0.2) {
       this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
     } else if (k < 0.24) {
@@ -33685,10 +33917,11 @@ var WorldGen = class {
       this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
     }
   }
-  _decorateSnow(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decorateSnow(chunk, lx, lz, wx, wz, sy, ground, r, biome = "snowy_plains") {
     const top = sy + 1;
     if (ground === ID.SNOW || ground === ID.GRASS || ground === ID.DIRT) {
-      if (r() < 0.01) {
+      const treeP = biome.includes("taiga") ? 0.06 : 0.01;
+      if (r() < treeP) {
         this._tree(chunk, lx, lz, top, "pine", r);
       } else if (r() < 0.05) {
         this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
@@ -33824,7 +34057,7 @@ var WorldGen = class {
   }
 };
 function mulberryAt(seed, wx, wz) {
-  let a = hashCombine(seed, wx, wz, SALT.decor) >>> 0;
+  let a = hashCombine(seed, wx, wz, SALT2.decor) >>> 0;
   return function() {
     a |= 0;
     a = a + 1831565813 | 0;
@@ -35326,6 +35559,22 @@ var World = class {
   getGroundSpawn(wx, wz) {
     wx = Math.floor(wx);
     wz = Math.floor(wz);
+    const wg = this.game && this.game.worldgen;
+    if (wg && typeof wg.heightAt === "function" && wg.heightAt(wx, wz) <= WATER_LEVEL) {
+      outer:
+        for (let r = 8; r <= 256; r += 8) {
+          for (let a = 0; a < 16; a++) {
+            const ang = a / 16 * Math.PI * 2;
+            const sx = wx + Math.round(Math.cos(ang) * r);
+            const sz = wz + Math.round(Math.sin(ang) * r);
+            if (wg.heightAt(sx, sz) > WATER_LEVEL + 1) {
+              wx = sx;
+              wz = sz;
+              break outer;
+            }
+          }
+        }
+    }
     let h = this.heightAt(wx, wz);
     if (h < 0) h = WATER_LEVEL;
     let y = h + 1;
@@ -42662,7 +42911,7 @@ var Weather = class {
       const b = wg.biomeAt(Math.floor(p.position.x), Math.floor(p.position.z));
       if (!b) return 0.5;
       if (typeof b.temperature === "number") return b.temperature;
-      const name = String(b.name || b.key || "").toLowerCase();
+      const name = String(typeof b === "string" ? b : b.name || b.key || "").toLowerCase();
       if (/snow|tundra|ice|frozen|peak/.test(name)) return 0.05;
       if (/desert|badland|savanna/.test(name)) return 0.95;
       return 0.5;
@@ -43192,7 +43441,7 @@ var HUD = class {
     let biome = "\u2014";
     if (worldgen && typeof worldgen.biomeAt === "function") {
       try {
-        biome = worldgen.biomeAt(x, z) || "\u2014";
+        biome = prettyBiome(worldgen.biomeAt(x, z));
       } catch (_) {
         biome = "\u2014";
       }
@@ -43231,7 +43480,7 @@ var HUD = class {
     let biome = "\u2014";
     if (worldgen && typeof worldgen.biomeAt === "function") {
       try {
-        biome = worldgen.biomeAt(Math.floor(x), Math.floor(z)) || "\u2014";
+        biome = prettyBiome(worldgen.biomeAt(Math.floor(x), Math.floor(z)));
       } catch (_) {
       }
     }
@@ -43304,6 +43553,10 @@ entities: ${mobCount} mobs, ${itemCount} items`;
     this.pips.length = 0;
   }
 };
+function prettyBiome(name) {
+  if (!name) return "\u2014";
+  return String(name).split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 
 // js/ui/menus.js
 var ICON_SIZE2 = 40;

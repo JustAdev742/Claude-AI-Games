@@ -20,6 +20,7 @@ import { Noise } from './noise.js';
 import { ID } from './blocks.js';
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ, WATER_LEVEL, BEACH_LEVEL } from './constants.js';
 import { RNG, hashCombine, clamp } from '../core/utils.js';
+import { Climate, selectBiome } from './climate.js';
 
 // ---- tuning constants ----------------------------------------------------
 
@@ -40,23 +41,31 @@ const SALT = {
   hill: 9137,
 };
 
-// Each biome describes its surface palette and how the shared continental
-// height field is scaled/biased into that biome's local terrain.
-//   base   — the y the biome settles around at "neutral" elevation noise
-//   amp    — vertical amplitude of rolling terrain
-//   ridged — extra height contributed by the ridge field (mountains/snow)
-//   rough  — weight of the high-frequency detail octave
-const BIOMES = {
-  ocean: { base: SEA - 7, amp: 4, ridged: 0, rough: 0.4, surface: ID.SAND, sub: ID.DIRT, beach: false },
-  beach: { base: SEA + 1, amp: 2, ridged: 0, rough: 0.3, surface: ID.SAND, sub: ID.SAND, beach: true },
-  plains: { base: SEA + 4, amp: 5, ridged: 0, rough: 0.5, surface: ID.GRASS, sub: ID.DIRT, beach: true },
-  forest: { base: SEA + 5, amp: 7, ridged: 0.15, rough: 0.7, surface: ID.GRASS, sub: ID.DIRT, beach: true },
-  desert: { base: SEA + 3, amp: 6, ridged: 0.05, rough: 0.6, surface: ID.SAND, sub: ID.SANDSTONE, beach: false },
-  mountains: { base: SEA + 12, amp: 10, ridged: 1.0, rough: 1.0, surface: ID.STONE, sub: ID.STONE, beach: false },
-  snow: { base: SEA + 14, amp: 9, ridged: 0.85, rough: 0.9, surface: ID.SNOW, sub: ID.DIRT, beach: false },
+// Surface palette per biome. Height is NOT here any more — the old table
+// carried a `base` elevation per biome, which meant biomes dictated terrain
+// and every border was a step. Height now comes from the climate system's
+// splines (see climate.js) and biomes only decide what the ground is MADE of.
+const SURFACES = {
+  deep_ocean: { surface: ID.GRAVEL, sub: ID.DIRT, beach: false },
+  ocean: { surface: ID.SAND, sub: ID.DIRT, beach: false },
+  frozen_ocean: { surface: ID.SAND, sub: ID.DIRT, beach: false, frozen: true },
+  beach: { surface: ID.SAND, sub: ID.SAND, beach: false },
+  snowy_beach: { surface: ID.SAND, sub: ID.SAND, beach: false, frozen: true },
+  desert: { surface: ID.SAND, sub: ID.SANDSTONE, beach: false },
+  badlands: { surface: ID.SANDSTONE, sub: ID.SANDSTONE, beach: false },
+  savanna: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  plains: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  forest: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  birch_forest: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  swamp: { surface: ID.GRASS, sub: ID.DIRT, beach: false },
+  jungle: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  taiga: { surface: ID.GRASS, sub: ID.DIRT, beach: true },
+  snowy_plains: { surface: ID.SNOW, sub: ID.DIRT, beach: false, frozen: true },
+  snowy_taiga: { surface: ID.SNOW, sub: ID.DIRT, beach: false, frozen: true },
+  mountains: { surface: ID.GRASS, sub: ID.DIRT, beach: false, alpine: true },
+  snowy_mountains: { surface: ID.SNOW, sub: ID.STONE, beach: false, alpine: true, frozen: true },
+  stony_peaks: { surface: ID.STONE, sub: ID.STONE, beach: false, alpine: true },
 };
-
-const RIDGE_HEIGHT = 26;   // peak height the normalized ridge field can add
 
 // Cross / decoration blocks treated as "non-ground" when scanning columns.
 function isDecoration(id) {
@@ -68,14 +77,10 @@ export class WorldGen {
   constructor(game) {
     this.game = game;
     this.seed = (game && game.seed) | 0 || 1337;
-    // Noise instances are created in setSeed/init so reseeding is trivial.
-    this.heightNoise = null;
-    this.detailNoise = null;
-    this.tempNoise = null;
-    this.moistNoise = null;
-    this.ridgeNoise = null;
+    // Terrain shape + biome choice live in the Climate system; the only noise
+    // owned here is the cave/ore field.
+    this.climate = null;
     this.caveNoise = null;
-    this.hillNoise = null;
     // Small memo so heightAt/biomeAt/columnInfo don't recompute repeatedly for
     // the same column during a single frame's queries (e.g. spawn searches).
     this._colCache = new Map();
@@ -87,14 +92,8 @@ export class WorldGen {
 
   setSeed(seed) {
     this.seed = (seed | 0) >>> 0;
-    // Derive a distinct integer seed per noise channel so they decorrelate.
-    this.heightNoise = new Noise(hashCombine(this.seed, SALT.height));
-    this.detailNoise = new Noise(hashCombine(this.seed, SALT.detail));
-    this.tempNoise = new Noise(hashCombine(this.seed, SALT.temp));
-    this.moistNoise = new Noise(hashCombine(this.seed, SALT.moist));
-    this.ridgeNoise = new Noise(hashCombine(this.seed, SALT.ridge));
+    this.climate = new Climate(this.seed);
     this.caveNoise = new Noise(hashCombine(this.seed, SALT.cave));
-    this.hillNoise = new Noise(hashCombine(this.seed, SALT.hill));
     this._colCache.clear();
     this._colCacheSeed = this.seed;
     return this;
@@ -108,69 +107,22 @@ export class WorldGen {
     return this;
   }
 
-  /* --- climate + biome selection --------------------------------------- */
+  /* --- public column queries -------------------------------------------- */
 
-  // Temperature/moisture fields, both in [0,1]. Large features so biomes form
-  // coherent regions rather than per-block noise.
-  /* Climate frequencies set how BIG biomes are. These were 0.0042/0.0051,
-     which puts a full noise period every ~200 blocks — small enough that a
-     desert threshold is crossed in isolated speckles rather than over a
-     region, producing the scattered sand patches in the middle of grassland.
-     At ~0.0011 a period spans roughly 900 blocks, so a desert forms as one
-     coherent area you walk into and out of.
-
-     fbm output is bell-distributed around 0, not uniform, so the raw range is
-     effectively about [-0.8, 0.8] with most samples near the middle. The
-     0.5 + 0.5*t remap therefore concentrates values around 0.5, which the
-     thresholds below account for. */
-  _temperature(wx, wz) {
-    const t = this.tempNoise.fbm2(wx, wz, 3, 0.0011, 2.0, 0.5);
-    return clamp(0.5 + 0.62 * t, 0, 1);
-  }
-  _moisture(wx, wz) {
-    const m = this.moistNoise.fbm2(wx, wz, 3, 0.0013, 2.0, 0.5);
-    return clamp(0.5 + 0.62 * m, 0, 1);
-  }
-
-  // A separate low-frequency "continent" field decides land vs. ocean so that
-  // oceans appear as large basins instead of wherever height happens to dip.
-  _continent(wx, wz) {
-    // Also lowered for scale: this decides where oceans and highlands sit, so
-    // it must vary more slowly than the terrain detail riding on top of it.
-    return this.heightNoise.fbm2(wx, wz, 4, 0.0011, 2.0, 0.5); // ~[-1,1]
-  }
-
-  // Choose a biome string from climate + elevation signal.
-  _classify(temperature, moisture, continent) {
-    if (continent < -0.34) return 'ocean';
-    // High elevation signal → mountains/snow regardless of moisture.
-    if (continent > 0.42) {
-      return temperature < 0.32 ? 'snow' : 'mountains';
-    }
-    // Near sea level with low continent → beaches handled later by height,
-    // but classify low-lying very-near-shore as beach when slightly positive.
-    if (continent < -0.24) return 'beach';
-    // Deserts demand a decisively hot, dry region. The old 0.66/0.38 pair sat
-    // close enough to the distribution's centre that the boundary was crossed
-    // constantly, scattering sand everywhere; these thresholds are far enough
-    // into the tails that a desert is a place, not a speckle.
-    if (temperature > 0.74 && moisture < 0.30) return 'desert';
-    if (temperature < 0.22) return 'snow';
-    if (moisture > 0.62) return 'forest';
-    return 'plains';
-  }
-
+  // Biome name at a world column ('plains', 'snowy_taiga', ...). A string,
+  // because the HUD prints it and the weather system matches on it.
   biomeAt(wx, wz) {
     return this._column(wx | 0, wz | 0).biome;
   }
 
+  // Terrain surface height at a world column (top solid block's y).
   heightAt(wx, wz) {
     return this._column(wx | 0, wz | 0).height;
   }
 
+  // Full descriptor for external callers (spawning, debug overlay).
   columnInfo(wx, wz) {
-    const c = this._column(wx | 0, wz | 0);
-    return { height: c.height, biome: c.biome, temperature: c.temperature, moisture: c.moisture };
+    return this._column(wx | 0, wz | 0);
   }
 
   /* --- per-column height computation ------------------------------------ */
@@ -182,13 +134,20 @@ export class WorldGen {
     const cached = this._colCache.get(key);
     if (cached !== undefined) return cached;
 
-    const temperature = this._temperature(wx, wz);
-    const moisture = this._moisture(wx, wz);
-    const continent = this._continent(wx, wz);
-    const biome = this._classify(temperature, moisture, continent);
-    const height = this._computeHeight(wx, wz, biome, continent, temperature, moisture);
+    // Terrain first, biome second: the climate system shapes the ground from
+    // continentalness/erosion/peaks splines, and the biome is then chosen by
+    // the climate AND that outcome. Nothing about the biome feeds back into
+    // height, which is why biome borders leave no seam in the terrain.
+    const c = this.climate.sample(wx, wz);
+    const biome = selectBiome(c);
+    // Normalised temperature (0..1) kept for the ice/decoration rules below.
+    const temperature = clamp(0.5 + 0.62 * c.temp, 0, 1);
+    const moisture = clamp(0.5 + 0.62 * c.humid, 0, 1);
 
-    const info = { height, biome, temperature, moisture, continent };
+    const info = {
+      height: c.height, biome, temperature, moisture,
+      continent: c.continent, erosion: c.erosion, river: c.river,
+    };
     // Keep the cache from growing without bound across a long session.
     if (this._colCache.size > 8192) this._colCache.clear();
     this._colCache.set(key, info);
@@ -210,61 +169,6 @@ export class WorldGen {
       }
     }
     return false;
-  }
-
-  _computeHeight(wx, wz, biome, continent, temperature, moisture) {
-    // Blend the height parameters with those of nearby columns so terrain
-    // transitions smoothly across biome borders instead of forming a hard step.
-    const b = this._blendedParams(wx, wz, biome);
-
-    // Rolling hills: medium-frequency fbm, ~[-1,1].
-    const roll = this.hillNoise.fbm2(wx, wz, 4, 0.012, 2.0, 0.5);
-    // Fine detail: high-frequency, small amplitude.
-    const detail = this.detailNoise.fbm2(wx, wz, 3, 0.06, 2.2, 0.5);
-    // Ridge field for mountainous biomes, [0,1].
-    const ridge = this.ridgeNoise.ridge2(wx, wz, 4, 0.0075);
-
-    // Continent gently lifts/lowers the whole column so biomes inherit the
-    // large-scale landmass shape (positive = inland highland).
-    const continentLift = continent * 6;
-
-    let h = b.base + continentLift;
-    h += roll * b.amp;
-    h += detail * b.amp * 0.35 * b.rough;
-    if (b.ridged > 0) {
-      // Square the ridge to sharpen peaks, scale by blended ridge weight.
-      h += ridge * ridge * RIDGE_HEIGHT * b.ridged;
-    }
-
-    // Oceans should never poke above the waterline from detail noise.
-    if (biome === 'ocean') h = Math.min(h, SEA - 1);
-
-    return clamp(Math.round(h), 1, MAX_Y - 6);
-  }
-
-  // Average the height parameters (base/amp/ridged/rough) of the biome here and
-  // at four nearby sample points, so the values change gradually across a biome
-  // border rather than snapping. Deterministic (pure climate noise).
-  _blendedParams(wx, wz, primaryBiome) {
-    const R = 6;
-    const offs = [[0, 0], [R, 0], [-R, 0], [0, R], [0, -R]];
-    let base = 0, amp = 0, ridged = 0, rough = 0;
-    for (let i = 0; i < offs.length; i++) {
-      const ox = offs[i][0], oz = offs[i][1];
-      let bio;
-      if (ox === 0 && oz === 0) {
-        bio = primaryBiome;
-      } else {
-        const t = this._temperature(wx + ox, wz + oz);
-        const m = this._moisture(wx + ox, wz + oz);
-        const c = this._continent(wx + ox, wz + oz);
-        bio = this._classify(t, m, c);
-      }
-      const bb = BIOMES[bio] || BIOMES.plains;
-      base += bb.base; amp += bb.amp; ridged += bb.ridged; rough += bb.rough;
-    }
-    const n = offs.length;
-    return { base: base / n, amp: amp / n, ridged: ridged / n, rough: rough / n };
   }
 
   /* --- chunk fill ------------------------------------------------------- */
@@ -294,14 +198,27 @@ export class WorldGen {
       }
     }
 
-    // Second pass: surface decorations. Done after terrain so trees can read
-    // back the freshly written surface and sit on solid ground.
-    for (let lx = 0; lx < CHUNK_SX; lx++) {
+    // Second pass: surface decorations, over the chunk PLUS a margin.
+    //
+    // A tree's canopy spans up to 3 blocks around its trunk. Decorating only
+    // the chunk's own columns clipped every tree rooted near a border —
+    // setLocal drops out-of-range writes, so half the canopy simply never
+    // existed, in whichever chunk generated first AND forever, because the
+    // neighbour never revisited it.
+    //
+    // Decoration decisions are per-column and seeded from WORLD coordinates
+    // (mulberryAt below), so both chunks adjacent to a border evaluate the
+    // margin column identically: each writes the part of the tree that lands
+    // inside itself, and together they produce one whole tree with no
+    // cross-chunk coordination.
+    const MARGIN = 3;
+    for (let lx = -MARGIN; lx < CHUNK_SX + MARGIN; lx++) {
       const wx = baseX + lx;
-      for (let lz = 0; lz < CHUNK_SZ; lz++) {
+      for (let lz = -MARGIN; lz < CHUNK_SZ + MARGIN; lz++) {
         const wz = baseZ + lz;
-        const info = cols[lx * CHUNK_SZ + lz];
-        this._decorate(chunk, lx, lz, wx, wz, info, chunkRng);
+        const inChunk = lx >= 0 && lx < CHUNK_SX && lz >= 0 && lz < CHUNK_SZ;
+        const info = inChunk ? cols[lx * CHUNK_SZ + lz] : this._column(wx, wz);
+        this._decorate(chunk, lx, lz, wx, wz, info, chunkRng, inChunk);
       }
     }
 
@@ -310,78 +227,92 @@ export class WorldGen {
 
   // Fill a single column: bedrock → stone (with ores/caves) → dirt band →
   // surface block → water up to sea level.
-  _fillColumn(chunk, lx, lz, wx, wz, info) {
+  /* Resolve the surface/sub blocks for a column — shared by chunk fill,
+     the margin decoration pass, and blockAt so they can never disagree. */
+  _surfaceFor(info, wx, wz) {
+    const b = SURFACES[info.biome] || SURFACES.plains;
     const surfaceY = info.height;
-    const biome = info.biome;
-    const b = BIOMES[biome] || BIOMES.plains;
 
-    // Is this surface a "beach"? Sand replaces grass/dirt right around the
-    // waterline on biomes that allow beaches.
-    // A beach requires actual WATER nearby, not merely an elevation that
-    // happens to fall in the coastal band. Testing height alone turned every
-    // inland hollow that dipped to y<=BEACH_LEVEL into a sand patch in the
-    // middle of grassland — the "random sand" artifact. Terrain height is a
-    // pure function of world coordinates, so probing neighbours is
-    // deterministic and identical from either side of a chunk border.
-    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL
-      && this._nearWater(wx, wz);
-
-    // Determine the surface + subsurface block ids for this column.
     let surfaceId = b.surface;
     let subId = b.sub;
-    if (isShore) { surfaceId = ID.SAND; subId = ID.SAND; }
-    // Submerged ground (ocean floor / underwater): use dirt/sand, never grass.
-    const submerged = surfaceY < SEA;
-    if (submerged && surfaceId === ID.GRASS) { surfaceId = ID.DIRT; }
 
-    // The dirt/sub band thickness just under the surface.
-    const subDepth = (surfaceId === ID.SAND) ? 4 : 3;
+    // Alpine biomes turn to bare stone above the treeline, so a mountain is
+    // grass at its foot and rock at its shoulder — the surface follows the
+    // height the splines produced rather than being one block everywhere.
+    if (b.alpine && surfaceId !== ID.STONE && surfaceY > SEA + 18) {
+      surfaceId = surfaceY > SEA + 26 ? ID.STONE : (b.frozen ? ID.SNOW : ID.STONE);
+      subId = ID.STONE;
+    }
+
+    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL
+      && this._nearWater(wx, wz);
+    if (isShore) { surfaceId = ID.SAND; subId = ID.SAND; }
+
+    if (surfaceY < SEA && surfaceId === ID.GRASS) surfaceId = ID.DIRT;
+    if (surfaceY < SEA && surfaceId === ID.SNOW) surfaceId = ID.DIRT;
+    return { surfaceId, subId, frozen: !!b.frozen };
+  }
+
+  /* The terrain block at one (wx,y,wz), given the column's resolved surface.
+     This is THE single definition of what the ground is made of: chunk fill
+     iterates it per y, and blockAt() answers a point query with it — so the
+     multiplayer rollback path reconstructs exactly what generation produced. */
+  _terrainBlockAt(info, surf, wx, y, wz) {
+    const surfaceY = info.height;
+
+    if (y > surfaceY) {
+      if (y <= SEA) {
+        if (y === SEA && (surf.frozen || info.temperature < 0.2)) return ID.ICE;
+        return ID.WATER;
+      }
+      return ID.AIR;
+    }
+
+    if (y <= BEDROCK_TOP) {
+      if (y === 0) return ID.BEDROCK;
+      const r = hashCombine(this.seed, wx, wz, y * 131 + SALT.height) / 4294967296;
+      return r < (1 - y / (BEDROCK_TOP + 1)) ? ID.BEDROCK : ID.STONE;
+    }
+
+    const subDepth = (surf.surfaceId === ID.SAND) ? 4 : 3;
+    let id;
+    if (y === surfaceY) id = surf.surfaceId;
+    else if (y >= surfaceY - subDepth) id = surf.subId;
+    else id = ID.STONE;
+
+    if (id === ID.STONE && y > BEDROCK_TOP) {
+      if (this._isCave(wx, y, wz, surfaceY)) return ID.AIR;
+      id = this._oreFor(wx, y, wz, id);
+    }
+    return id;
+  }
+
+  /**
+   * Pure point query: the block generation would place at (wx,y,wz), terrain
+   * only (no trees/plants — decorations are cross-column and not needed by
+   * the callers of this API). Used by the multiplayer client to reconstruct
+   * the true block when the server rejects a predicted edit on an unedited
+   * voxel.
+   */
+  blockAt(wx, wy, wz) {
+    wx |= 0; wy |= 0; wz |= 0;
+    if (wy < 0 || wy > MAX_Y) return ID.AIR;
+    const info = this._column(wx, wz);
+    const surf = this._surfaceFor(info, wx, wz);
+    return this._terrainBlockAt(info, surf, wx, wy, wz);
+  }
+
+  _fillColumn(chunk, lx, lz, wx, wz, info) {
+    const surfaceY = info.height;
+    const surf = this._surfaceFor(info, wx, wz);
 
     for (let y = 0; y <= surfaceY; y++) {
-      let id;
-
-      if (y <= BEDROCK_TOP) {
-        // Jagged bedrock floor: y=0 always bedrock; 1..2 sometimes bedrock.
-        if (y === 0) id = ID.BEDROCK;
-        else {
-          const r = hashCombine(this.seed, wx, wz, y * 131 + SALT.height) / 4294967296;
-          id = r < (1 - y / (BEDROCK_TOP + 1)) ? ID.BEDROCK : ID.STONE;
-        }
-      } else if (y >= surfaceY - subDepth && y < surfaceY) {
-        id = subId;
-      } else if (y === surfaceY) {
-        id = surfaceId;
-      } else {
-        id = ID.STONE;
-      }
-
-      // Stone region: carve caves and seed ores (never touch bedrock).
-      if (id === ID.STONE && y > BEDROCK_TOP) {
-        if (this._isCave(wx, y, wz, surfaceY)) {
-          // Air below sea level inside terrain could be water-filled, but we
-          // keep caves dry for explorability; just skip placing a block.
-          continue;
-        }
-        id = this._oreFor(wx, y, wz, id);
-      }
-
-      chunk.setLocal(lx, y, lz, id);
+      const id = this._terrainBlockAt(info, surf, wx, y, wz);
+      if (id !== ID.AIR) chunk.setLocal(lx, y, lz, id);
     }
-
-    // Snowy peaks: cap exposed high stone with a thin snow layer for flavor.
-    if (biome === 'snow' && surfaceY > SEA && surfaceId === ID.SNOW) {
-      // already snow; nothing extra
-    }
-
-    // Fill water from the surface up to sea level for submerged columns.
     if (surfaceY < SEA) {
       for (let y = surfaceY + 1; y <= SEA; y++) {
-        // Freeze the very top of ocean water in cold biomes into ice.
-        if (y === SEA && (biome === 'snow' || info.temperature < 0.22)) {
-          chunk.setLocal(lx, y, lz, ID.ICE);
-        } else {
-          chunk.setLocal(lx, y, lz, ID.WATER);
-        }
+        chunk.setLocal(lx, y, lz, this._terrainBlockAt(info, surf, wx, y, wz));
       }
     }
   }
@@ -442,7 +373,7 @@ export class WorldGen {
 
   /* --- decorations ------------------------------------------------------ */
 
-  _decorate(chunk, lx, lz, wx, wz, info, rng) {
+  _decorate(chunk, lx, lz, wx, wz, info, rng, inChunk = true) {
     const biome = info.biome;
     const surfaceY = info.height;
 
@@ -450,10 +381,19 @@ export class WorldGen {
     if (surfaceY < SEA) return;
     if (surfaceY >= MAX_Y - 8) return;            // leave headroom for trees
 
-    // The block we'd be standing on. Read it back so we don't plant on sand
-    // where a beach overrode the biome surface, etc.
-    const ground = chunk.getLocal ? chunk.getLocal(lx, surfaceY, lz) : ID.AIR;
-    const above = chunk.getLocal ? chunk.getLocal(lx, surfaceY + 1, lz) : ID.AIR;
+    // The block we'd be standing on. Inside the chunk, read it back so we
+    // don't plant on beach sand etc. For MARGIN columns the chunk holds no
+    // data (getLocal would say AIR and veto everything), so derive the same
+    // answer from the deterministic surface rules instead — both sides of a
+    // border must reach identical decisions.
+    let ground, above;
+    if (inChunk) {
+      ground = chunk.getLocal ? chunk.getLocal(lx, surfaceY, lz) : ID.AIR;
+      above = chunk.getLocal ? chunk.getLocal(lx, surfaceY + 1, lz) : ID.AIR;
+    } else {
+      ground = this._surfaceFor(info, wx, wz).surfaceId;
+      above = ID.AIR;
+    }
     if (above !== ID.AIR) return;                 // already occupied (overhang)
 
     // Per-column random stream so each column decides independently yet
@@ -462,21 +402,33 @@ export class WorldGen {
 
     switch (biome) {
       case 'desert':
+      case 'badlands':
         this._decorateDesert(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       case 'forest':
-        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case 'jungle':                 // denser variant handled inside
+        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
-      case 'snow':
-        this._decorateSnow(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case 'birch_forest':
+        this._decorateForest(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
+        break;
+      case 'taiga':
+      case 'snowy_taiga':
+      case 'snowy_plains':
+        this._decorateSnow(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
       case 'mountains':
+      case 'snowy_mountains':
+      case 'stony_peaks':
         this._decorateMountains(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       case 'plains':
-        this._decoratePlains(chunk, lx, lz, wx, wz, surfaceY, ground, r);
+      case 'savanna':
+      case 'swamp':
+        this._decoratePlains(chunk, lx, lz, wx, wz, surfaceY, ground, r, biome);
         break;
       case 'beach':
+      case 'snowy_beach':
         this._decorateBeach(chunk, lx, lz, wx, wz, surfaceY, ground, r);
         break;
       default:
@@ -484,10 +436,16 @@ export class WorldGen {
     }
   }
 
-  _decoratePlains(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decoratePlains(chunk, lx, lz, wx, wz, sy, ground, r, biome = 'plains') {
     if (ground !== ID.GRASS) return;
     const top = sy + 1;
-    if (r() < 0.012) {                         // sparse oak trees
+    // Savanna: slightly more trees than plains; swamp: mushrooms over flowers.
+    const treeP = biome === 'savanna' ? 0.02 : 0.012;
+    if (biome === 'swamp' && r() < 0.03) {
+      this._setCross(chunk, lx, top, lz, ID.MUSHROOM_RED);
+      return;
+    }
+    if (r() < treeP) {                         // sparse oak trees
       this._tree(chunk, lx, lz, top, 'oak', r);
     } else if (r() < 0.10) {                    // tall grass
       this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
@@ -498,12 +456,14 @@ export class WorldGen {
     }
   }
 
-  _decorateForest(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decorateForest(chunk, lx, lz, wx, wz, sy, ground, r, biome = 'forest') {
     if (ground !== ID.GRASS) return;
     const top = sy + 1;
     const k = r();
-    if (k < 0.085) {                            // dense trees (oak + birch)
-      this._tree(chunk, lx, lz, top, r() < 0.35 ? 'birch' : 'oak', r);
+    const density = biome === 'jungle' ? 0.13 : 0.085;
+    const birchShare = biome === 'birch_forest' ? 0.85 : 0.35;
+    if (k < density) {
+      this._tree(chunk, lx, lz, top, r() < birchShare ? 'birch' : 'oak', r);
     } else if (k < 0.20) {
       this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
     } else if (k < 0.24) {
@@ -531,10 +491,12 @@ export class WorldGen {
     }
   }
 
-  _decorateSnow(chunk, lx, lz, wx, wz, sy, ground, r) {
+  _decorateSnow(chunk, lx, lz, wx, wz, sy, ground, r, biome = 'snowy_plains') {
     const top = sy + 1;
     if (ground === ID.SNOW || ground === ID.GRASS || ground === ID.DIRT) {
-      if (r() < 0.010) {                        // hardy pine trees
+      // Taigas are pine forests; snowy plains only get the odd stray tree.
+      const treeP = biome.includes('taiga') ? 0.06 : 0.010;
+      if (r() < treeP) {
         this._tree(chunk, lx, lz, top, 'pine', r);
       } else if (r() < 0.05) {
         this._setCross(chunk, lx, top, lz, ID.TALL_GRASS);
