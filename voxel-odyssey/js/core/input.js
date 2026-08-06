@@ -124,6 +124,13 @@ export class Input {
     this._onBlur = () => { this._down.clear(); this.buttons.clear(); };
 
     this._onMouseDown = (e) => {
+      // While locked (real pointer lock OR the fallback), every button press
+      // belongs to the game no matter what element it lands on. The old
+      // canvas-only binding silently ate clicks in the fallback: the cursor is
+      // hidden but still moves, so once it drifted over the hotbar or HUD,
+      // right-clicks stopped reaching the game with no visible reason why.
+      if (!this.locked && e.target !== this.canvas) return;
+      if (this.locked && e.button === 2) e.preventDefault();
       this.buttons.add(e.button);
       this._buttonPressed.add(e.button);
     };
@@ -173,11 +180,15 @@ export class Input {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('blur', this._onBlur);
-    this.canvas.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mousedown', this._onMouseDown);
     window.addEventListener('mouseup', this._onMouseUp);
     window.addEventListener('mousemove', this._onMouseMove);
     this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContext);
+    // While locked, the browser context menu must never open regardless of
+    // which element the invisible fallback cursor happens to be over.
+    this._onWindowContext = (e) => { if (this.locked) e.preventDefault(); };
+    window.addEventListener('contextmenu', this._onWindowContext);
     this._onFullscreenChange = () => {
       const fs = !!document.fullscreenElement;
       if (this.events) this.events.emit('fullscreen', { active: fs });
@@ -239,11 +250,12 @@ export class Input {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('blur', this._onBlur);
-    this.canvas.removeEventListener('mousedown', this._onMouseDown);
+    window.removeEventListener('mousedown', this._onMouseDown);
     window.removeEventListener('mouseup', this._onMouseUp);
     window.removeEventListener('mousemove', this._onMouseMove);
     this.canvas.removeEventListener('wheel', this._onWheel);
     this.canvas.removeEventListener('contextmenu', this._onContext);
+    window.removeEventListener('contextmenu', this._onWindowContext);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     document.removeEventListener('pointerlockerror', this._onPointerLockError);
     document.removeEventListener('fullscreenchange', this._onFullscreenChange);

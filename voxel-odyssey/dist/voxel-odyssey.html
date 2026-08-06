@@ -31453,6 +31453,8 @@ var Input = class {
       this.buttons.clear();
     };
     this._onMouseDown = (e) => {
+      if (!this.locked && e.target !== this.canvas) return;
+      if (this.locked && e.button === 2) e.preventDefault();
       this.buttons.add(e.button);
       this._buttonPressed.add(e.button);
     };
@@ -31490,11 +31492,15 @@ var Input = class {
     window.addEventListener("keydown", this._onKeyDown);
     window.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("blur", this._onBlur);
-    this.canvas.addEventListener("mousedown", this._onMouseDown);
+    window.addEventListener("mousedown", this._onMouseDown);
     window.addEventListener("mouseup", this._onMouseUp);
     window.addEventListener("mousemove", this._onMouseMove);
     this.canvas.addEventListener("wheel", this._onWheel, { passive: false });
     this.canvas.addEventListener("contextmenu", this._onContext);
+    this._onWindowContext = (e) => {
+      if (this.locked) e.preventDefault();
+    };
+    window.addEventListener("contextmenu", this._onWindowContext);
     this._onFullscreenChange = () => {
       const fs = !!document.fullscreenElement;
       if (this.events) this.events.emit("fullscreen", { active: fs });
@@ -31540,11 +31546,12 @@ var Input = class {
     window.removeEventListener("keydown", this._onKeyDown);
     window.removeEventListener("keyup", this._onKeyUp);
     window.removeEventListener("blur", this._onBlur);
-    this.canvas.removeEventListener("mousedown", this._onMouseDown);
+    window.removeEventListener("mousedown", this._onMouseDown);
     window.removeEventListener("mouseup", this._onMouseUp);
     window.removeEventListener("mousemove", this._onMouseMove);
     this.canvas.removeEventListener("wheel", this._onWheel);
     this.canvas.removeEventListener("contextmenu", this._onContext);
+    window.removeEventListener("contextmenu", this._onWindowContext);
     document.removeEventListener("pointerlockchange", this._onPointerLockChange);
     document.removeEventListener("pointerlockerror", this._onPointerLockError);
     document.removeEventListener("fullscreenchange", this._onFullscreenChange);
@@ -32104,7 +32111,8 @@ var ID = {
   OBSIDIAN: 37,
   EMERALD_ORE: 38,
   REDSTONE_ORE: 39,
-  LANTERN: 40
+  LANTERN: 40,
+  LAVA: 41
 };
 Object.freeze(ID);
 function def(o) {
@@ -32498,6 +32506,22 @@ register(ID.REDSTONE_ORE, "redstone_ore", {
   hardness: 3.2,
   tool: "pickaxe",
   drop: "redstone",
+  walkSound: "stone"
+});
+register(ID.LAVA, "lava", {
+  // A liquid that lights its surroundings: the flood-fill picks the emission
+  // up automatically, so pools glow with no dedicated light-source code.
+  name: "Lava",
+  solid: false,
+  transparent: true,
+  liquid: true,
+  opacity: 15,
+  light: 13,
+  render: "liquid",
+  color: [0.86, 0.32, 0.06],
+  hardness: 100,
+  drop: null,
+  tool: "any",
   walkSound: "stone"
 });
 register(ID.LANTERN, "lantern", {
@@ -33559,6 +33583,7 @@ function selectBiome(sample) {
 var SEA = WATER_LEVEL;
 var MAX_Y = CHUNK_SY - 1;
 var BEDROCK_TOP = 2;
+var LAVA_LEVEL = 9;
 var SALT2 = {
   height: 1013,
   detail: 2027,
@@ -33772,14 +33797,18 @@ var WorldGen = class {
       const r = hashCombine(this.seed, wx, wz, y * 131 + SALT2.height) / 4294967296;
       return r < 1 - y / (BEDROCK_TOP + 1) ? ID.BEDROCK : ID.STONE;
     }
-    if (info.carveFloor !== null && y > info.carveFloor) return ID.AIR;
+    if (info.carveFloor !== null && y > info.carveFloor) {
+      return y <= LAVA_LEVEL ? ID.LAVA : ID.AIR;
+    }
     const subDepth = surf.surfaceId === ID.SAND ? 4 : 3;
     let id;
     if (y === surfaceY) id = surf.surfaceId;
     else if (y >= surfaceY - subDepth) id = surf.subId;
     else id = ID.STONE;
     if (id === ID.STONE && y > BEDROCK_TOP) {
-      if (this._isCave(wx, y, wz, surfaceY)) return ID.AIR;
+      if (this._isCave(wx, y, wz, surfaceY)) {
+        return y <= LAVA_LEVEL ? ID.LAVA : ID.AIR;
+      }
       id = this._oreFor(wx, y, wz, id);
     }
     return id;
@@ -35626,8 +35655,9 @@ var World = class {
   // March a ray through the voxel grid (Amanatides & Woo). Returns the first
   // targetable block (solid OR cross-type), the face normal stepped through,
   // the empty cell adjacent across that normal (for placement), and the id.
-  raycast(origin, dir, maxDist = 6) {
+  raycast(origin, dir, maxDist = 6, opts = {}) {
     if (!origin || !dir) return null;
+    const skip = opts.skip || null;
     let dx = dir.x, dy = dir.y, dz = dir.z;
     const len = Math.hypot(dx, dy, dz);
     if (len < 1e-8) return null;
@@ -35654,8 +35684,9 @@ var World = class {
     const maxSteps = Math.ceil(maxDist * 3) + 8;
     for (let i = 0; i < maxSteps; i++) {
       const id = this.getBlock(ix, iy, iz);
-      const targetable = blocks_default.isSolid(id) || blocks_default.renderType(id) === "cross";
-      if (targetable && id !== ID.AIR) {
+      let targetable = (blocks_default.isSolid(id) || blocks_default.renderType(id) === "cross") && id !== ID.AIR;
+      if (targetable && skip && skip(ix, iy, iz, id)) targetable = false;
+      if (targetable) {
         const def2 = blocks_default.get(id);
         const replaceable = def2 && (def2.render === "cross" || def2.liquid);
         const place = replaceable ? { x: ix, y: iy, z: iz } : { x: ix + nx, y: iy + ny, z: iz + nz };
@@ -36467,7 +36498,10 @@ var Player = class {
     }
     this._contactTimer -= dt;
     if (!this.isCreative && this._contactTimer <= 0) {
-      if (this._touchingBlock(ID.CACTUS)) {
+      if (this._isBlockAt(ID.LAVA, this.position.x, this.position.y + 0.3, this.position.z)) {
+        this._contactTimer = CONTACT_DAMAGE_INTERVAL;
+        this.hurt(3, "lava");
+      } else if (this._touchingBlock(ID.CACTUS)) {
         this._contactTimer = CONTACT_DAMAGE_INTERVAL;
         this.hurt(1, "cactus");
       }
@@ -36539,7 +36573,8 @@ var Player = class {
     const eye = this.getEyePosition().clone();
     const dir = this.getLookDir();
     const world = this.game.world;
-    const hit = world && typeof world.raycast === "function" ? world.raycast(eye, dir, REACH) : null;
+    const skipOwnPlants = (x, y, z, id) => blocks_default.renderType(id) === "cross" && this._aabbOverlapsCell(x, y, z);
+    const hit = world && typeof world.raycast === "function" ? world.raycast(eye, dir, REACH, { skip: skipOwnPlants }) : null;
     this._lastTarget = hit;
     const held = inv ? inv.selectedItem() : null;
     const heldKey = held ? held.id : null;
@@ -36842,6 +36877,11 @@ var Player = class {
     const p = this.mineProgress || 0;
     h.material.color.setScalar(0.04 + p * 0.9);
     h.material.opacity = 0.85 + 0.15 * p;
+  }
+  _isBlockAt(id, x, y, z) {
+    const world = this.game.world;
+    if (!world) return false;
+    return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === id;
   }
   /* ---- block-break crack decal ----------------------------------------- */
   /* Five procedurally drawn crack stages, shown on the block being mined.
@@ -40614,6 +40654,7 @@ var BLOCK_TEXTURES = {
   grass: { top: "grass_top", side: "grass_side", bottom: "dirt" },
   sand: "sand",
   water: "water",
+  lava: "lava",
   log: { top: "log_top", side: "log_side", bottom: "log_top" },
   leaves: "leaves",
   planks: "planks",
@@ -41291,6 +41332,26 @@ function buildWaterStrip(s) {
   }
   return strip;
 }
+function buildLavaStrip(s) {
+  const strip = makeCanvas(s, s * 4);
+  const ctx = strip.getContext("2d");
+  for (let f = 0; f < 4; f++) {
+    const t = new Tile(s, "lava#" + f);
+    const phase = f / 4 * Math.PI * 2;
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) {
+        const v = Math.sin(x / s * Math.PI * 2 + phase + Math.sin(y * 0.9)) + Math.sin(y / s * Math.PI * 2 - phase * 0.7 + Math.cos(x * 0.7));
+        const hot = v > 0.6 ? 1 : v > -0.2 ? 0.55 : 0.25;
+        const j = (t.rand() - 0.5) * 0.14;
+        t.set(x, y, (200 + 55 * hot) * (1 + j), (60 + 120 * hot) * (1 + j), 18 * (1 + j), 255);
+      }
+    }
+    const img = ctx.createImageData(s, s);
+    img.data.set(t.data);
+    ctx.putImageData(img, 0, f * s);
+  }
+  return strip;
+}
 function generateDefaultTextures(tileSize = 16) {
   const out = {};
   for (const name of requiredTextureNames()) {
@@ -41304,6 +41365,7 @@ function generateDefaultTextures(tileSize = 16) {
     out[name] = t.toCanvas();
   }
   out.water = { image: buildWaterStrip(tileSize), frames: 4, meta: { frametime: 10 } };
+  out.lava = { image: buildLavaStrip(tileSize), frames: 4, meta: { frametime: 16 } };
   return out;
 }
 function colourForTextureName(name) {
@@ -41322,6 +41384,7 @@ var PACK_ALIASES = {
   grass_side: ["grass_block_side", "grass_side"],
   sand: ["sand"],
   water: ["water_still", "water"],
+  lava: ["lava_still", "lava"],
   log_side: ["oak_log", "log_oak"],
   log_top: ["oak_log_top", "log_oak_top"],
   leaves: ["oak_leaves", "leaves_oak"],

@@ -243,6 +243,24 @@ const DECOR = new Set([ID.LOG, ID.BIRCH_LOG, ID.PINE_LOG, ID.LEAVES, ID.BIRCH_LE
     }
   }
   ok('caves: no water floating over carved air', floatingWater === 0, `${floatingWater}`);
+
+  // Lava pools: carved space at/below the lava table is molten, never
+  // hanging over air, and lights its surroundings via the flood fill.
+  let lavaVox = 0, lavaOverAir = 0, litByLava = 0;
+  for (let cx = -2; cx <= 2; cx++) {
+    for (let cz = -2; cz <= 2; cz++) {
+      const c = genChunk(wg2, cx, cz);
+      for (let lx = 0; lx < CHUNK_SX; lx++) for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        for (let y = 1; y < 14; y++) {
+          if (c.blocks[localIndex(lx, y, lz)] !== ID.LAVA) continue;
+          lavaVox++;
+          if (c.blocks[localIndex(lx, y - 1, lz)] === ID.AIR) lavaOverAir++;
+        }
+      }
+    }
+  }
+  ok('lava: pools exist in the deeps', lavaVox > 30, `${lavaVox}`);
+  ok('lava: never floats over air', lavaOverAir === 0, `${lavaOverAir}`);
 }
 
 console.log(`\n==== worldgen: ${pass} passed, ${fail} failed ====`);

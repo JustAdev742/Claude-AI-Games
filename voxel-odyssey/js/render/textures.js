@@ -578,6 +578,33 @@ function buildWaterStrip(s) {
   return strip;
 }
 
+/* Lava: slow-churning bright cells over a dark crust, phase-shifted per
+   frame like water. Brightness carries the read — the block also EMITS light
+   (see blocks.js), so pools illuminate their cave. */
+function buildLavaStrip(s) {
+  const strip = makeCanvas(s, s * 4);
+  const ctx = strip.getContext('2d');
+  for (let f = 0; f < 4; f++) {
+    const t = new Tile(s, 'lava#' + f);
+    const phase = (f / 4) * Math.PI * 2;
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) {
+        // Two drifting sine fields make slow blobs; their sum picks between
+        // crust and glow.
+        const v = Math.sin((x / s) * Math.PI * 2 + phase + Math.sin(y * 0.9))
+          + Math.sin((y / s) * Math.PI * 2 - phase * 0.7 + Math.cos(x * 0.7));
+        const hot = v > 0.6 ? 1 : v > -0.2 ? 0.55 : 0.25;
+        const j = (t.rand() - 0.5) * 0.14;
+        t.set(x, y, (200 + 55 * hot) * (1 + j), (60 + 120 * hot) * (1 + j), 18 * (1 + j), 255);
+      }
+    }
+    const img = ctx.createImageData(s, s);
+    img.data.set(t.data);
+    ctx.putImageData(img, 0, f * s);
+  }
+  return strip;
+}
+
 export function generateDefaultTextures(tileSize = 16) {
   const out = {};
   for (const name of requiredTextureNames()) {
@@ -594,6 +621,7 @@ export function generateDefaultTextures(tileSize = 16) {
   }
   // Frame-animated overrides (same {image, frames, meta} shape a pack yields).
   out.water = { image: buildWaterStrip(tileSize), frames: 4, meta: { frametime: 10 } };
+  out.lava = { image: buildLavaStrip(tileSize), frames: 4, meta: { frametime: 16 } };
   return out;
 }
 

@@ -390,8 +390,9 @@ export class World {
   // March a ray through the voxel grid (Amanatides & Woo). Returns the first
   // targetable block (solid OR cross-type), the face normal stepped through,
   // the empty cell adjacent across that normal (for placement), and the id.
-  raycast(origin, dir, maxDist = 6) {
+  raycast(origin, dir, maxDist = 6, opts = {}) {
     if (!origin || !dir) return null;
+    const skip = opts.skip || null;
 
     // Normalize the direction; bail on a zero-length ray.
     let dx = dir.x, dy = dir.y, dz = dir.z;
@@ -430,8 +431,12 @@ export class World {
     const maxSteps = Math.ceil(maxDist * 3) + 8;
     for (let i = 0; i < maxSteps; i++) {
       const id = this.getBlock(ix, iy, iz);
-      const targetable = Blocks.isSolid(id) || Blocks.renderType(id) === 'cross';
-      if (targetable && id !== ID.AIR) {
+      let targetable = (Blocks.isSolid(id) || Blocks.renderType(id) === 'cross') && id !== ID.AIR;
+      // Caller veto — the player uses this to look THROUGH the grass tuft its
+      // own body is standing in, which otherwise absorbs every downward ray
+      // and makes "place a block on the ground at my feet" impossible.
+      if (targetable && skip && skip(ix, iy, iz, id)) targetable = false;
+      if (targetable) {
         // Plants and liquids are REPLACEABLE: you build into them, not against
         // them. Returning block+normal for a tuft of grass aimed the placement
         // cell back toward the player, where it collided with the player's own

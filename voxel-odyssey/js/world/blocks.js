@@ -121,6 +121,7 @@ export const ID = {
   EMERALD_ORE: 38,
   REDSTONE_ORE: 39,
   LANTERN: 40,
+  LAVA: 41,
 };
 Object.freeze(ID);
 
@@ -299,6 +300,13 @@ register(ID.EMERALD_ORE, 'emerald_ore', {
 });
 register(ID.REDSTONE_ORE, 'redstone_ore', {
   name: 'Redstone Ore', color: rgb(150, 60, 60), light: 4, hardness: 3.2, tool: 'pickaxe', drop: 'redstone', walkSound: 'stone',
+});
+register(ID.LAVA, 'lava', {
+  // A liquid that lights its surroundings: the flood-fill picks the emission
+  // up automatically, so pools glow with no dedicated light-source code.
+  name: 'Lava', solid: false, transparent: true, liquid: true, opacity: 15,
+  light: 13, render: 'liquid', color: [0.86, 0.32, 0.06], hardness: 100,
+  drop: null, tool: 'any', walkSound: 'stone',
 });
 register(ID.LANTERN, 'lantern', {
   name: 'Lantern', color: rgb(240, 220, 150), light: 15, transparent: true, opacity: 2,

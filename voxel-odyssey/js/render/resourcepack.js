@@ -36,6 +36,7 @@ export const PACK_ALIASES = {
   grass_side: ['grass_block_side', 'grass_side'],
   sand: ['sand'],
   water: ['water_still', 'water'],
+  lava: ['lava_still', 'lava'],
   log_side: ['oak_log', 'log_oak'],
   log_top: ['oak_log_top', 'log_oak_top'],
   leaves: ['oak_leaves', 'leaves_oak'],

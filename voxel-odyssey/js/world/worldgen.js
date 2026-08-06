@@ -26,7 +26,10 @@ import { Climate, selectBiome } from './climate.js';
 
 const SEA = WATER_LEVEL;                 // 28
 const MAX_Y = CHUNK_SY - 1;              // 79
-const BEDROCK_TOP = 2;                   // y 0..2 region is (mostly) bedrock
+const BEDROCK_TOP = 2;
+// Carved space at or below this height fills with lava instead of air, giving
+// the deep caverns their molten pools (diamond/emerald bands sit just above).
+const LAVA_LEVEL = 9;                   // y 0..2 region is (mostly) bedrock
 
 // Salts keep independent noise channels from correlating. Any distinct ints.
 const SALT = {
@@ -302,8 +305,11 @@ export class WorldGen {
     }
 
     // Ravine cut: everything between the carve floor and the surface is air,
-    // including the surface block itself — that IS the canyon opening.
-    if (info.carveFloor !== null && y > info.carveFloor) return ID.AIR;
+    // including the surface block itself — that IS the canyon opening. A
+    // ravine deep enough to reach the lava table exposes it.
+    if (info.carveFloor !== null && y > info.carveFloor) {
+      return y <= LAVA_LEVEL ? ID.LAVA : ID.AIR;
+    }
 
     const subDepth = (surf.surfaceId === ID.SAND) ? 4 : 3;
     let id;
@@ -312,7 +318,14 @@ export class WorldGen {
     else id = ID.STONE;
 
     if (id === ID.STONE && y > BEDROCK_TOP) {
-      if (this._isCave(wx, y, wz, surfaceY)) return ID.AIR;
+      if (this._isCave(wx, y, wz, surfaceY)) {
+        // Below the lava table, carved space is molten rather than empty.
+        // Because EVERY carved cell at or below the level becomes lava, a
+        // lava cell can never sit above carved air — the cell beneath is
+        // either uncarved stone or more lava — so pools need no support
+        // checks or flow simulation to be stable.
+        return y <= LAVA_LEVEL ? ID.LAVA : ID.AIR;
+      }
       id = this._oreFor(wx, y, wz, id);
     }
     return id;

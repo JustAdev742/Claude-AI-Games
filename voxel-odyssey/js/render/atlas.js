@@ -44,6 +44,7 @@ export const BLOCK_TEXTURES = {
   grass: { top: 'grass_top', side: 'grass_side', bottom: 'dirt' },
   sand: 'sand',
   water: 'water',
+  lava: 'lava',
   log: { top: 'log_top', side: 'log_side', bottom: 'log_top' },
   leaves: 'leaves',
   planks: 'planks',

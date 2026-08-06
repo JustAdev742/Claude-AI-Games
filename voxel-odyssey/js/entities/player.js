@@ -605,10 +605,13 @@ export class Player {
       this.game.hud.setOverlay('water', this.headUnderwater);
     }
 
-    // --- contact damage from cactus while standing next to it ---
+    // --- contact damage: cactus beside us, lava around our feet ---
     this._contactTimer -= dt;
     if (!this.isCreative && this._contactTimer <= 0) {
-      if (this._touchingBlock(ID.CACTUS)) {
+      if (this._isBlockAt(ID.LAVA, this.position.x, this.position.y + 0.3, this.position.z)) {
+        this._contactTimer = CONTACT_DAMAGE_INTERVAL;
+        this.hurt(3, 'lava');
+      } else if (this._touchingBlock(ID.CACTUS)) {
         this._contactTimer = CONTACT_DAMAGE_INTERVAL;
         this.hurt(1, 'cactus');
       }
@@ -697,8 +700,14 @@ export class Player {
     const eye = this.getEyePosition().clone();
     const dir = this.getLookDir();
     const world = this.game.world;
+    // Skip plant tufts whose cell intersects our own body: standing in tall
+    // grass, every downward ray hit the tuft at our own feet, and the
+    // placement cell it yielded was our own feet cell — always rejected by
+    // the body-overlap check. Looking through it reaches the actual ground.
+    const skipOwnPlants = (x, y, z, id) =>
+      Blocks.renderType(id) === 'cross' && this._aabbOverlapsCell(x, y, z);
     const hit = (world && typeof world.raycast === 'function')
-      ? world.raycast(eye, dir, REACH)
+      ? world.raycast(eye, dir, REACH, { skip: skipOwnPlants })
       : null;
     this._lastTarget = hit;
 
@@ -1052,6 +1061,12 @@ export class Player {
     const p = this.mineProgress || 0;
     h.material.color.setScalar(0.04 + p * 0.9);
     h.material.opacity = 0.85 + 0.15 * p;
+  }
+
+  _isBlockAt(id, x, y, z) {
+    const world = this.game.world;
+    if (!world) return false;
+    return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === id;
   }
 
   /* ---- block-break crack decal ----------------------------------------- */
