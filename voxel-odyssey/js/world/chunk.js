@@ -238,6 +238,11 @@ const TINT_SEED = 1337;
 // multiplies the texture by shading alone.
 const WHITE = [1, 1, 1];
 
+// UVs for a quad's four corners, in FACES corner order
+// (top-left, bottom-left, bottom-right, top-right). Constant because a
+// texture array gives every tile the full 0..1 range.
+const FACE_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
+
 export function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false; // default on
@@ -336,14 +341,14 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
     const shade = FACE_SHADE[f];
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
+    const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
 
     // The shader computes base = texture * vColor. When a texture supplies the
     // albedo, vColor must carry ONLY shading and tint — passing the block's
     // base colour as well would square the albedo, which comes out dark and
     // oversaturated. Untextured blocks still need the colour, since it is the
     // only thing describing what they look like.
-    const source = tile ? WHITE : Blocks.faceColor(id, f);
+    const source = layer >= 0 ? WHITE : Blocks.faceColor(id, f);
     const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
     const r = tinted[0] * shade;
     const g = tinted[1] * shade;
@@ -352,7 +357,7 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
 
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, tile);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, layer);
   }
 }
 
@@ -374,8 +379,8 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
     const shade = FACE_SHADE[f];
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
-    const base = tile ? WHITE : Blocks.faceColor(id, f);
+    const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
+    const base = layer >= 0 ? WHITE : Blocks.faceColor(id, f);
     const r = base[0] * shade;
     const g = base[1] * shade;
     const b = base[2] * shade;
@@ -384,16 +389,16 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
 
     // The top face (and the upper edge of side faces) uses the lowered height
     // only when the surface is exposed.
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 1.0 - topY, null, lit, tile);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 1.0 - topY, null, lit, layer);
   }
 }
 
 /* -------- emit a cross-quad plant/torch -------- */
 function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
-  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
+  const layer = ctx.atlas ? ctx.atlas.layerFor(id, 2) : -1;
   // As in emitCube: with a texture the vertex colour is neutral so the albedo
   // isn't applied twice.
-  const color = tile ? WHITE : Blocks.faceColor(id, 2);
+  const color = layer >= 0 ? WHITE : Blocks.faceColor(id, 2);
 
   // A cross-quad occupies the same cell it is lit by, so sample light at the
   // block itself rather than at a neighbour. An emissive cross (a torch) would
@@ -415,9 +420,9 @@ function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const n = [0, 1, 0];
 
   // Quad A: from (x0,z0) to (x1,z1) — a diagonal plane.
-  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, tile);
+  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, layer);
   // Quad B: from (x0,z1) to (x1,z0) — the crossing diagonal plane.
-  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, tile);
+  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, layer);
 }
 
 /* -------- AO computation for a cube face -------- */
@@ -510,7 +515,7 @@ function lightForFace(ctx, f, wx, wy_, wz) {
 // y is 1 — used to give water a sunken surface. `aoArr` (or null) supplies the
 // per-corner AO factor, `lit` the per-corner (sky, block) pairs, and `tile`
 // the atlas rect (or null when untextured).
-function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
+function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, layer) {
   const face = FACES[f];
   const dir = face.dir;
   const corners = face.corners;
@@ -518,10 +523,10 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
 
   // Quad corner order is (top-left, bottom-left, bottom-right, top-right),
   // so UVs walk the tile rect in the same order.
-  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
-  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
-  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
-  const ti = tile ? tile.index : -1;
+  // Every texture owns a full array layer, so the UV rect is always the whole
+  // tile. Corner order is (top-left, bottom-left, bottom-right, top-right).
+  const uvs = FACE_UVS;
+  const ti = layer;
 
   for (let c = 0; c < 4; c++) {
     const cor = corners[c];
@@ -545,17 +550,15 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
 }
 
 // Generic quad writer (used by cross planes) with explicit positions/normal.
-function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, tile) {
+function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, layer) {
   const startVert = bucket.positions.length / 3;
   bucket.positions.push(p0[0], p0[1], p0[2]);
   bucket.positions.push(p1[0], p1[1], p1[2]);
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
 
-  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
-  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
-  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
-  const ti = tile ? tile.index : -1;
+  const uvs = FACE_UVS;
+  const ti = layer;
 
   for (let i = 0; i < 4; i++) {
     bucket.normals.push(n[0], n[1], n[2]);

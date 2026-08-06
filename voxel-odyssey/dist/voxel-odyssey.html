@@ -31390,7 +31390,8 @@ var DEFAULT_BINDINGS = {
   debug: ["F3"],
   chat: ["KeyT"],
   perspective: ["F5"],
-  screenshot: ["F2"]
+  screenshot: ["F2"],
+  fullscreen: ["F11"]
 };
 var Input = class {
   constructor(canvas, events, state) {
@@ -31441,6 +31442,7 @@ var Input = class {
         e.preventDefault();
       }
       if (e.code === "F3" || e.code === "F5" || e.code === "F2") e.preventDefault();
+      if (e.code === "F11") e.preventDefault();
     };
     this._onKeyUp = (e) => {
       this._down.delete(e.code);
@@ -31461,10 +31463,10 @@ var Input = class {
     this._onMouseMove = (e) => {
       this._pointerX = e.clientX;
       this._pointerY = e.clientY;
-      if (this.locked) {
-        this.mouseDX += e.movementX || 0;
-        this.mouseDY += e.movementY || 0;
-      }
+      if (!this.locked) return;
+      if (this.virtualLock && e.target !== this.canvas) return;
+      this.mouseDX += e.movementX || 0;
+      this.mouseDY += e.movementY || 0;
     };
     this._onWheel = (e) => {
       this.wheel += Math.sign(e.deltaY);
@@ -31493,8 +31495,46 @@ var Input = class {
     window.addEventListener("mousemove", this._onMouseMove);
     this.canvas.addEventListener("wheel", this._onWheel, { passive: false });
     this.canvas.addEventListener("contextmenu", this._onContext);
+    this._onFullscreenChange = () => {
+      const fs = !!document.fullscreenElement;
+      if (this.events) this.events.emit("fullscreen", { active: fs });
+      if (this._fsRelock) clearTimeout(this._fsRelock);
+      this._fsRelock = setTimeout(() => {
+        this._fsRelock = null;
+        const flags = this.state && this.state.flags;
+        if (!flags || flags.mode !== "play" || flags.paused || flags.inventoryOpen) return;
+        this._lockFailures = 0;
+        this.requestLock();
+      }, 120);
+    };
     document.addEventListener("pointerlockchange", this._onPointerLockChange);
     document.addEventListener("pointerlockerror", this._onPointerLockError);
+    document.addEventListener("fullscreenchange", this._onFullscreenChange);
+  }
+  /* ---- fullscreen ------------------------------------------------------ */
+  get isFullscreen() {
+    return typeof document !== "undefined" && !!document.fullscreenElement;
+  }
+  /**
+   * Toggle fullscreen on the game's container.
+   *
+   * Requested on the canvas's PARENT rather than the canvas itself: a
+   * fullscreen <canvas> takes the HUD and menus out of the visible tree,
+   * because they are siblings, not children. Promoting the container keeps
+   * the whole UI on screen.
+   */
+  async toggleFullscreen() {
+    if (typeof document === "undefined") return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        const target = this.canvas && this.canvas.parentElement || document.documentElement;
+        await target.requestFullscreen();
+      }
+    } catch (err) {
+      console.warn("fullscreen request refused", err && err.message);
+    }
   }
   dispose() {
     window.removeEventListener("keydown", this._onKeyDown);
@@ -31507,6 +31547,15 @@ var Input = class {
     this.canvas.removeEventListener("contextmenu", this._onContext);
     document.removeEventListener("pointerlockchange", this._onPointerLockChange);
     document.removeEventListener("pointerlockerror", this._onPointerLockError);
+    document.removeEventListener("fullscreenchange", this._onFullscreenChange);
+    if (this._fsRelock) {
+      clearTimeout(this._fsRelock);
+      this._fsRelock = null;
+    }
+    if (this._lockRetry) {
+      clearTimeout(this._lockRetry);
+      this._lockRetry = null;
+    }
   }
   /* ---- pointer lock ---- */
   _setLocked(locked) {
@@ -33875,6 +33924,7 @@ function buildAOOffsets() {
 var TINT_AMOUNT = 0.045;
 var TINT_SEED = 1337;
 var WHITE = [1, 1, 1];
+var FACE_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
 function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false;
@@ -33959,15 +34009,15 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     const neighbor = ctx.sample(nx, ny, nz);
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
     const shade2 = FACE_SHADE[f];
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
-    const source = tile ? WHITE : blocks_default.faceColor(id, f);
+    const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
+    const source = layer >= 0 ? WHITE : blocks_default.faceColor(id, f);
     const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
     const r = tinted[0] * shade2;
     const g = tinted[1] * shade2;
     const b = tinted[2] * shade2;
     const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, tile);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, layer);
   }
 }
 function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
@@ -33982,18 +34032,18 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     if (blocks_default.isLiquid(neighbor)) continue;
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
     const shade2 = FACE_SHADE[f];
-    const tile = ctx.atlas ? ctx.atlas.tileFor(id, f) : null;
-    const base = tile ? WHITE : blocks_default.faceColor(id, f);
+    const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
+    const base = layer >= 0 ? WHITE : blocks_default.faceColor(id, f);
     const r = base[0] * shade2;
     const g = base[1] * shade2;
     const b = base[2] * shade2;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
-    pushFace(bucket, f, lx, ly, lz, r, g, b, 1 - topY, null, lit, tile);
+    pushFace(bucket, f, lx, ly, lz, r, g, b, 1 - topY, null, lit, layer);
   }
 }
 function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
-  const tile = ctx.atlas ? ctx.atlas.tileFor(id, 2) : null;
-  const color = tile ? WHITE : blocks_default.faceColor(id, 2);
+  const layer = ctx.atlas ? ctx.atlas.layerFor(id, 2) : -1;
+  const color = layer >= 0 ? WHITE : blocks_default.faceColor(id, 2);
   const packed = ctx.sampleLight(wx, wy_, wz);
   const sky = (packed >> 4 & 15) / 15;
   const blk = (packed & 15) / 15;
@@ -34004,8 +34054,8 @@ function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const y0 = ly, y1 = ly + 1;
   const r = color[0], g = color[1], b = color[2];
   const n = [0, 1, 0];
-  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, tile);
-  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, tile);
+  addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, layer);
+  addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, layer);
 }
 function aoForFace(sample, f, wx, wy_, wz) {
   const dir = FACES[f].dir;
@@ -34068,15 +34118,13 @@ function lightForFace(ctx, f, wx, wy_, wz) {
   }
   return out;
 }
-function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
+function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, layer) {
   const face = FACES[f];
   const dir = face.dir;
   const corners = face.corners;
   const startVert = bucket.positions.length / 3;
-  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
-  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
-  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
-  const ti = tile ? tile.index : -1;
+  const uvs = FACE_UVS;
+  const ti = layer;
   for (let c = 0; c < 4; c++) {
     const cor = corners[c];
     const px2 = lx + cor[0];
@@ -34093,16 +34141,14 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, tile) {
   }
   pushQuadIndices(bucket, startVert, aoArr, lit);
 }
-function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, tile) {
+function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, layer) {
   const startVert = bucket.positions.length / 3;
   bucket.positions.push(p0[0], p0[1], p0[2]);
   bucket.positions.push(p1[0], p1[1], p1[2]);
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
-  const u0 = tile ? tile.u0 : 0, v0 = tile ? tile.v0 : 0;
-  const u1 = tile ? tile.u1 : 0, v1 = tile ? tile.v1 : 0;
-  const uvs = [u0, v1, u0, v0, u1, v0, u1, v1];
-  const ti = tile ? tile.index : -1;
+  const uvs = FACE_UVS;
+  const ti = layer;
   for (let i = 0; i < 4; i++) {
     bucket.normals.push(n[0], n[1], n[2]);
     bucket.colors.push(r, g, b);
@@ -34791,7 +34837,11 @@ function createVoxelMaterials(shared) {
   }, {
     uWaveStrength: { value: 1 }
   });
-  return { opaque, water, foliage };
+  const viewmodel = mk({
+    name: "voxel-viewmodel",
+    fog: false
+  });
+  return { opaque, water, foliage, viewmodel };
 }
 function updateVoxelUniforms(shared, skyState) {
   if (!shared) return;
@@ -35011,6 +35061,7 @@ var World = class {
     this.matOpaque = null;
     this.matWater = null;
     this.matCross = null;
+    this.matViewmodel = null;
     this.uniforms = null;
     this.lighting = new LightEngine(this);
     this.atlas = null;
@@ -35028,6 +35079,7 @@ var World = class {
     this.matOpaque = mats.opaque;
     this.matWater = mats.water;
     this.matCross = mats.foliage;
+    this.matViewmodel = mats.viewmodel;
     this.meshPool.init();
     return this;
   }
@@ -35555,6 +35607,63 @@ var World = class {
   }
 };
 
+// js/render/blockModel.js
+var FACE_UVS2 = [0, 1, 0, 0, 1, 0, 1, 1];
+function buildBlockGeometry(blockId, atlas, size = 1) {
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const light = [];
+  const ao = [];
+  const uv = [];
+  const texIdx = [];
+  const indices = [];
+  const h = size / 2;
+  for (let f = 0; f < 6; f++) {
+    const face = FACES[f];
+    const dir = face.dir;
+    const shade2 = FACE_SHADE[f];
+    const layer = atlas ? atlas.layerFor(blockId, f) : -1;
+    const base = layer >= 0 ? [1, 1, 1] : blocks_default.faceColor(blockId, f);
+    const r = base[0] * shade2, g = base[1] * shade2, b = base[2] * shade2;
+    const start = positions.length / 3;
+    for (let c = 0; c < 4; c++) {
+      const cor = face.corners[c];
+      positions.push((cor[0] - 0.5) * size, (cor[1] - 0.5) * size, (cor[2] - 0.5) * size);
+      normals.push(dir[0], dir[1], dir[2]);
+      colors.push(r, g, b);
+      ao.push(1);
+      light.push(1, 0);
+      uv.push(FACE_UVS2[c * 2], FACE_UVS2[c * 2 + 1]);
+      texIdx.push(layer);
+    }
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+  }
+  const geom = new BufferGeometry();
+  geom.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
+  geom.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
+  geom.setAttribute("aColor", new BufferAttribute(new Float32Array(colors), 3));
+  geom.setAttribute("aLight", new BufferAttribute(new Float32Array(light), 2));
+  geom.setAttribute("aAO", new BufferAttribute(new Float32Array(ao), 1));
+  geom.setAttribute("uv", new BufferAttribute(new Float32Array(uv), 2));
+  geom.setAttribute("aTexIdx", new BufferAttribute(new Float32Array(texIdx), 1));
+  geom.setIndex(new BufferAttribute(new Uint16Array(indices), 1));
+  geom.computeBoundingSphere();
+  geom.userData.voxelFormat = true;
+  return geom;
+}
+function setBlockGeometryLight(geom, sky, block) {
+  const attr = geom && geom.attributes && geom.attributes.aLight;
+  if (!attr) return;
+  const a = attr.array;
+  if (Math.abs(a[0] - sky) < 2e-3 && Math.abs(a[1] - block) < 2e-3) return;
+  for (let i = 0; i < a.length; i += 2) {
+    a[i] = sky;
+    a[i + 1] = block;
+  }
+  attr.needsUpdate = true;
+}
+
 // js/entities/player.js
 var PLAYER_WIDTH = 0.6;
 var PLAYER_HEIGHT = 1.8;
@@ -35640,6 +35749,10 @@ var Player = class {
         this._refreshViewmodel();
       });
       ev.on("inventory:change", () => {
+        this._refreshViewmodel();
+      });
+      ev.on("resources:pack", () => {
+        this._viewmodelKey = void 0;
         this._refreshViewmodel();
       });
     }
@@ -36370,14 +36483,17 @@ var Player = class {
       this._disposeObject(this._viewmodel);
       this._viewmodel = null;
     }
+    this._vmBlockGeom = null;
     if (!itemKey) return;
     const group = new Group();
     const item = items_default.get(itemKey);
-    if (item && items_default.isPlaceable(itemKey) && item.blockId !== void 0) {
-      const col = blocks_default.iconColor(item.blockId);
-      const mat = new MeshLambertMaterial({ color: new Color(col[0], col[1], col[2]) });
-      const cube = new Mesh(new BoxGeometry(0.42, 0.42, 0.42), mat);
+    const world = this.game.world;
+    if (item && items_default.isPlaceable(itemKey) && item.blockId !== void 0 && world && world.matViewmodel) {
+      const geom = buildBlockGeometry(item.blockId, world.atlas, 0.42);
+      const cube = new Mesh(geom, world.matViewmodel);
+      cube.frustumCulled = false;
       group.add(cube);
+      this._vmBlockGeom = geom;
     } else {
       let col = [0.7, 0.7, 0.72];
       if (item && item.icon && item.icon.color) col = item.icon.color;
@@ -36386,15 +36502,31 @@ var Player = class {
       bar.rotation.z = -0.5;
       group.add(bar);
     }
-    const light = new DirectionalLight(16777215, 0.9);
-    light.position.set(0.5, 1, 1);
-    group.add(light);
-    group.add(new AmbientLight(16777215, 0.5));
+    if (!this._vmBlockGeom) {
+      const light = new DirectionalLight(16777215, 0.9);
+      light.position.set(0.5, 1, 1);
+      group.add(light);
+      group.add(new AmbientLight(16777215, 0.5));
+    }
     this._viewmodel = group;
     vmScene.add(group);
   }
   _updateViewmodel(dt) {
     if (!this._viewmodel) return;
+    if (this._vmBlockGeom) {
+      const world = this.game.world;
+      let sky = 1, blk = 0;
+      if (world && typeof world.getLightByte === "function") {
+        const packed = world.getLightByte(
+          Math.floor(this.position.x),
+          Math.floor(this.position.y + this._eyeY),
+          Math.floor(this.position.z)
+        );
+        sky = (packed >> 4 & 15) / 15;
+        blk = (packed & 15) / 15;
+      }
+      setBlockGeometryLight(this._vmBlockGeom, sky, blk);
+    }
     const swing = this._swing;
     const bob = this._bobAmount;
     const t = this.game.elapsed || 0;
@@ -40032,7 +40164,6 @@ var TextureAtlas = class _TextureAtlas {
     this.indexByName = /* @__PURE__ */ new Map();
     this.animations = /* @__PURE__ */ new Map();
     this._faceLayer = null;
-    this._tile = { index: -1, u0: 0, v0: 0, u1: 1, v1: 1 };
   }
   get layerCount() {
     return this.names.length;
@@ -40072,7 +40203,13 @@ var TextureAtlas = class _TextureAtlas {
           console.warn(`atlas: could not draw texture "${e.name}"`, err);
         }
         const img = ctx.getImageData(0, 0, tileSize, tileSize);
-        data.set(img.data, size * layer);
+        const rowBytes = tileSize * 4;
+        const base = size * layer;
+        for (let row = 0; row < tileSize; row++) {
+          const src = row * rowBytes;
+          const dst = base + (tileSize - 1 - row) * rowBytes;
+          data.set(img.data.subarray(src, src + rowBytes), dst);
+        }
         layer++;
       }
       atlas.names[first] = e.name;
@@ -40122,21 +40259,15 @@ var TextureAtlas = class _TextureAtlas {
     }
   }
   /**
-   * Layer + UV rect for one block face. UVs are the full 0..1 tile because
-   * every texture owns its own array layer.
-   * Returns null when the block has no texture (mesher falls back to colour).
+   * Atlas layer for one block face, or -1 when the block has no texture (the
+   * mesher then falls back to flat vertex colour).
+   *
+   * Returns a primitive on purpose: it cannot alias, cannot be mutated by a
+   * later call, and allocates nothing in the mesher's hot loop.
    */
-  tileFor(blockId, face) {
-    if (!this._faceLayer) return null;
-    const idx = this._faceLayer[blockId * 6 + face];
-    if (idx < 0) return null;
-    const t = this._tile;
-    t.index = idx;
-    t.u0 = 0;
-    t.v0 = 0;
-    t.u1 = 1;
-    t.v1 = 1;
-    return t;
+  layerFor(blockId, face) {
+    if (!this._faceLayer) return -1;
+    return this._faceLayer[blockId * 6 + face];
   }
   /* Advance animated textures. Rewrites the face table's layer index rather
      than uploading pixels, so an animated water surface costs one integer
@@ -43442,6 +43573,11 @@ var Menus = class {
     panel.appendChild(this._slider("musicVolume", "Music", 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
     panel.appendChild(this._make("hr", { class: "sep" }));
     panel.appendChild(this._make("hr", { class: "sep" }));
+    panel.appendChild(this._button("Toggle Fullscreen (F11)", {
+      onClick: () => {
+        if (this.game.input) this.game.input.toggleFullscreen();
+      }
+    }));
     panel.appendChild(this._button("Customise Controls\u2026", {
       onClick: () => this.showKeybinds(back)
     }));
@@ -44635,6 +44771,7 @@ async function boot() {
         if (!state.flags.paused && input.actionPressed("debug")) {
           state.flags.debug = !state.flags.debug;
         }
+        if (input.actionPressed("fullscreen")) input.toggleFullscreen();
       }
       input.pollGamepad(state.settings);
       if (game.net) game.net.update(dt);

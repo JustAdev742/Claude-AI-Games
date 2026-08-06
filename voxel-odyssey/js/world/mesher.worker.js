@@ -39,14 +39,8 @@ const padIndex = (px, y, pz) => (px * PSZ + pz) * CHUNK_SY + y;
    worker; the face->layer lookup table is a plain Int32Array, which can. */
 function makeAtlasShim(faceLayer) {
   if (!faceLayer) return null;
-  const tile = { index: -1, u0: 0, v0: 0, u1: 1, v1: 1 };
   return {
-    tileFor(blockId, face) {
-      const idx = faceLayer[blockId * 6 + face];
-      if (idx < 0) return null;
-      tile.index = idx;
-      return tile;
-    },
+    layerFor(blockId, face) { return faceLayer[blockId * 6 + face]; },
   };
 }
 

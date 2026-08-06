@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import Blocks, { ID } from '../world/blocks.js';
+import { buildBlockGeometry, setBlockGeometryLight } from '../render/blockModel.js';
 import Items from '../items/items.js';
 import { clamp, lerp, damp, DEG2RAD } from '../core/utils.js';
 
@@ -136,6 +137,9 @@ export class Player {
     if (ev) {
       ev.on('hotbar:select', () => { this._refreshViewmodel(); });
       ev.on('inventory:change', () => { this._refreshViewmodel(); });
+      // A resource pack swap changes every atlas layer index, so the held
+      // block's baked aTexIdx is stale — force a rebuild.
+      ev.on('resources:pack', () => { this._viewmodelKey = undefined; this._refreshViewmodel(); });
     }
     // Build the initial viewmodel (deferred-safe: inventory may be empty).
     this._refreshViewmodel();
@@ -1023,17 +1027,24 @@ export class Player {
       this._disposeObject(this._viewmodel);
       this._viewmodel = null;
     }
+    this._vmBlockGeom = null;
     if (!itemKey) return;
 
     const group = new THREE.Group();
     const item = Items.get(itemKey);
 
-    if (item && Items.isPlaceable(itemKey) && item.blockId !== undefined) {
-      // Show a little cube colored by the block.
-      const col = Blocks.iconColor(item.blockId);
-      const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(col[0], col[1], col[2]) });
-      const cube = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.42), mat);
+    const world = this.game.world;
+    if (item && Items.isPlaceable(itemKey) && item.blockId !== undefined
+        && world && world.matViewmodel) {
+      // Build the held block through the SAME geometry format and the SAME
+      // shader the terrain uses, rather than approximating it with a flat
+      // coloured box. It therefore gets the texture atlas, per-face shading
+      // and the voxel light curve for free, and cannot drift from the world.
+      const geom = buildBlockGeometry(item.blockId, world.atlas, 0.42);
+      const cube = new THREE.Mesh(geom, world.matViewmodel);
+      cube.frustumCulled = false;   // it is always in front of the camera
       group.add(cube);
+      this._vmBlockGeom = geom;
     } else {
       // Show a generic stick/tool sliver colored by the item.
       let col = [0.7, 0.7, 0.72];
@@ -1044,11 +1055,15 @@ export class Player {
       group.add(bar);
     }
 
-    // A soft light so the viewmodel isn't dependent on the world's Sky lights.
-    const light = new THREE.DirectionalLight(0xffffff, 0.9);
-    light.position.set(0.5, 1, 1);
-    group.add(light);
-    group.add(new THREE.AmbientLight(0xffffff, 0.5));
+    // Tools/items still use a Lambert sliver, so they need a light. A held
+    // BLOCK does not: it is lit by the voxel shader from baked light, exactly
+    // like the terrain.
+    if (!this._vmBlockGeom) {
+      const light = new THREE.DirectionalLight(0xffffff, 0.9);
+      light.position.set(0.5, 1, 1);
+      group.add(light);
+      group.add(new THREE.AmbientLight(0xffffff, 0.5));
+    }
 
     this._viewmodel = group;
     vmScene.add(group);
@@ -1056,6 +1071,24 @@ export class Player {
 
   _updateViewmodel(dt) {
     if (!this._viewmodel) return;
+
+    // Light the held block from wherever the player is standing, so walking
+    // into a cave darkens it along with the walls.
+    if (this._vmBlockGeom) {
+      const world = this.game.world;
+      let sky = 1, blk = 0;
+      if (world && typeof world.getLightByte === 'function') {
+        const packed = world.getLightByte(
+          Math.floor(this.position.x),
+          Math.floor(this.position.y + this._eyeY),
+          Math.floor(this.position.z),
+        );
+        sky = ((packed >> 4) & 0x0f) / 15;
+        blk = (packed & 0x0f) / 15;
+      }
+      setBlockGeometryLight(this._vmBlockGeom, sky, blk);
+    }
+
     // Rest pose: lower-right of the screen, in front of the camera.
     const swing = this._swing;
     const bob = this._bobAmount;

@@ -422,6 +422,9 @@ export class Menus {
     // ---- Footer --------------------------------------------------------
     panel.appendChild(this._make('hr', { class: 'sep' }));
     panel.appendChild(this._make('hr', { class: 'sep' }));
+    panel.appendChild(this._button('Toggle Fullscreen (F11)', {
+      onClick: () => { if (this.game.input) this.game.input.toggleFullscreen(); },
+    }));
     panel.appendChild(this._button('Customise Controls…', {
       onClick: () => this.showKeybinds(back),
     }));

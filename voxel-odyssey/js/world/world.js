@@ -60,6 +60,7 @@ export class World {
     this.matOpaque = null;
     this.matWater = null;
     this.matCross = null;
+    this.matViewmodel = null;
     this.uniforms = null;
 
     // Voxel light propagation. Owns skylight + blocklight for every resident
@@ -98,6 +99,9 @@ export class World {
     this.matOpaque = mats.opaque;
     this.matWater = mats.water;
     this.matCross = mats.foliage;
+    // Shared with the held-item viewmodel so it renders through the same
+    // pipeline as the terrain.
+    this.matViewmodel = mats.viewmodel;
     this.meshPool.init();
     return this;
   }

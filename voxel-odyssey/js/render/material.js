@@ -234,7 +234,22 @@ export function createVoxelMaterials(shared) {
     uWaveStrength: { value: 1.0 },
   });
 
-  return { opaque, water, foliage };
+  // The held-item viewmodel. Same shader, same shared uniforms — so it picks
+  // up the texture atlas and the time of day automatically and can never
+  // drift from how the world looks.
+  //
+  // Fog is disabled rather than inherited: the viewmodel is drawn in its own
+  // scene with the depth buffer cleared, sitting centimetres from the camera,
+  // and a fogged held item would be nonsense. It also matters mechanically —
+  // Three compiles USE_FOG from scene.fog, so sharing one material between a
+  // fogged scene and an unfogged one would force a shader recompile on every
+  // scene switch, every frame.
+  const viewmodel = mk({
+    name: 'voxel-viewmodel',
+    fog: false,
+  });
+
+  return { opaque, water, foliage, viewmodel };
 }
 
 /**

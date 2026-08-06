@@ -96,13 +96,15 @@ export class TextureAtlas {
 
     // blockId*6 + face -> layer index. Flat array so the mesher's per-face
     // lookup is an array read, not a map lookup + string build. The mesher
-    // calls tileFor() once per emitted face — millions of times per world.
+    // calls layerFor() once per emitted face — millions of times per world.
     this._faceLayer = null;
 
-    // Reusable tile descriptor. tileFor() is called in the mesher's hot loop;
-    // returning a fresh object per face would allocate several million
-    // short-lived objects during a world load.
-    this._tile = { index: -1, u0: 0, v0: 0, u1: 1, v1: 1 };
+    // NOTE: layer lookup returns a plain integer, not a descriptor object.
+    // An earlier version returned a shared mutable {index,u0,v0,u1,v1} to
+    // avoid allocating in the mesher's hot loop, but that aliases: holding
+    // two results at once silently gave both the second one's index. With a
+    // texture array the UV rect is always the whole tile, so the object
+    // carried no information beyond the index anyway.
   }
 
   get layerCount() { return this.names.length; }
@@ -154,7 +156,27 @@ export class TextureAtlas {
           console.warn(`atlas: could not draw texture "${e.name}"`, err);
         }
         const img = ctx.getImageData(0, 0, tileSize, tileSize);
-        data.set(img.data, size * layer);
+
+        // Flip vertically on the way in.
+        //
+        // Three applies UNPACK_FLIP_Y_WEBGL only to image-sourced textures.
+        // A DataArrayTexture is a raw typed-array upload, so it gets no such
+        // treatment: row 0 of the buffer becomes v=0, which GL samples as the
+        // BOTTOM of the texture — while canvas getImageData returns rows
+        // top-first. Uploading directly therefore renders every texture upside
+        // down (grass blocks showed dirt on top and the green lip underneath).
+        //
+        // Correcting it here, once, is what makes every consumer right
+        // automatically — terrain, the held-item viewmodel, inventory icons and
+        // anything added later — instead of each one carrying its own flipped
+        // UVs to compensate.
+        const rowBytes = tileSize * 4;
+        const base = size * layer;
+        for (let row = 0; row < tileSize; row++) {
+          const src = row * rowBytes;
+          const dst = base + (tileSize - 1 - row) * rowBytes;
+          data.set(img.data.subarray(src, src + rowBytes), dst);
+        }
         layer++;
       }
 
@@ -215,18 +237,15 @@ export class TextureAtlas {
   }
 
   /**
-   * Layer + UV rect for one block face. UVs are the full 0..1 tile because
-   * every texture owns its own array layer.
-   * Returns null when the block has no texture (mesher falls back to colour).
+   * Atlas layer for one block face, or -1 when the block has no texture (the
+   * mesher then falls back to flat vertex colour).
+   *
+   * Returns a primitive on purpose: it cannot alias, cannot be mutated by a
+   * later call, and allocates nothing in the mesher's hot loop.
    */
-  tileFor(blockId, face) {
-    if (!this._faceLayer) return null;
-    const idx = this._faceLayer[blockId * 6 + face];
-    if (idx < 0) return null;
-    const t = this._tile;
-    t.index = idx;
-    t.u0 = 0; t.v0 = 0; t.u1 = 1; t.v1 = 1;
-    return t;
+  layerFor(blockId, face) {
+    if (!this._faceLayer) return -1;
+    return this._faceLayer[blockId * 6 + face];
   }
 
   /* Advance animated textures. Rewrites the face table's layer index rather

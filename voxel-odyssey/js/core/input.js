@@ -36,6 +36,7 @@ export const DEFAULT_BINDINGS = {
   chat: ['KeyT'],
   perspective: ['F5'],
   screenshot: ['F2'],
+  fullscreen: ['F11'],
 };
 
 export class Input {
@@ -110,6 +111,11 @@ export class Input {
         e.preventDefault();
       }
       if (e.code === 'F3' || e.code === 'F5' || e.code === 'F2') e.preventDefault();
+      // Take F11 ourselves so fullscreen goes through toggleFullscreen(),
+      // which re-acquires pointer lock afterwards. Browsers still honour
+      // their own F11 in some configurations, which is why fullscreenchange
+      // is handled independently rather than relying on this.
+      if (e.code === 'F11') e.preventDefault();
     };
     this._onKeyUp = (e) => {
       this._down.delete(e.code);
@@ -128,10 +134,20 @@ export class Input {
     this._onMouseMove = (e) => {
       this._pointerX = e.clientX;
       this._pointerY = e.clientY;
-      if (this.locked) {
-        this.mouseDX += e.movementX || 0;
-        this.mouseDY += e.movementY || 0;
-      }
+      if (!this.locked) return;
+
+      // With REAL pointer lock the cursor is captured, so every movement event
+      // is legitimately ours no matter what it reports as its target.
+      //
+      // In the fallback there is a real cursor loose on the page, and this
+      // listener is on `window` — so moving the mouse over a menu, the HUD, or
+      // off the canvas entirely still rotated the camera. Restricting the
+      // fallback to movement actually over the canvas is what stops the view
+      // spinning from mouse activity outside the game.
+      if (this.virtualLock && e.target !== this.canvas) return;
+
+      this.mouseDX += e.movementX || 0;
+      this.mouseDY += e.movementY || 0;
     };
     this._onWheel = (e) => {
       this.wheel += Math.sign(e.deltaY);
@@ -162,8 +178,61 @@ export class Input {
     window.addEventListener('mousemove', this._onMouseMove);
     this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContext);
+    this._onFullscreenChange = () => {
+      const fs = !!document.fullscreenElement;
+      if (this.events) this.events.emit('fullscreen', { active: fs });
+
+      // Browsers drop pointer lock as part of the fullscreen transition. If we
+      // don't re-take it the game silently falls back to cursor-bound look,
+      // where the mouse escapes the window and keeps steering the camera —
+      // and, because aiming drives block placement, blocks land wherever the
+      // stray cursor dragged the view.
+      //
+      // The lock request must wait for the transition to settle; issuing it
+      // in the same task is refused by Chrome.
+      if (this._fsRelock) clearTimeout(this._fsRelock);
+      this._fsRelock = setTimeout(() => {
+        this._fsRelock = null;
+        const flags = this.state && this.state.flags;
+        if (!flags || flags.mode !== 'play' || flags.paused || flags.inventoryOpen) return;
+        this._lockFailures = 0;   // a fullscreen change is a fresh start
+        this.requestLock();
+      }, 120);
+    };
+
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
     document.addEventListener('pointerlockerror', this._onPointerLockError);
+    document.addEventListener('fullscreenchange', this._onFullscreenChange);
+  }
+
+  /* ---- fullscreen ------------------------------------------------------ */
+  get isFullscreen() {
+    return typeof document !== 'undefined' && !!document.fullscreenElement;
+  }
+
+  /**
+   * Toggle fullscreen on the game's container.
+   *
+   * Requested on the canvas's PARENT rather than the canvas itself: a
+   * fullscreen <canvas> takes the HUD and menus out of the visible tree,
+   * because they are siblings, not children. Promoting the container keeps
+   * the whole UI on screen.
+   */
+  async toggleFullscreen() {
+    if (typeof document === 'undefined') return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        const target = (this.canvas && this.canvas.parentElement) || document.documentElement;
+        await target.requestFullscreen();
+        // Pointer lock is re-taken by the fullscreenchange handler above.
+      }
+    } catch (err) {
+      // Fullscreen needs a user gesture and can be refused by policy; a
+      // failure must not take the input system down with it.
+      console.warn('fullscreen request refused', err && err.message);
+    }
   }
 
   dispose() {
@@ -177,6 +246,9 @@ export class Input {
     this.canvas.removeEventListener('contextmenu', this._onContext);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     document.removeEventListener('pointerlockerror', this._onPointerLockError);
+    document.removeEventListener('fullscreenchange', this._onFullscreenChange);
+    if (this._fsRelock) { clearTimeout(this._fsRelock); this._fsRelock = null; }
+    if (this._lockRetry) { clearTimeout(this._lockRetry); this._lockRetry = null; }
   }
 
   /* ---- pointer lock ---- */

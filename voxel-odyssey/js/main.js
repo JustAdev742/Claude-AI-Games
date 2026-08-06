@@ -406,6 +406,10 @@ async function boot() {
         if (!state.flags.paused && input.actionPressed('debug')) {
           state.flags.debug = !state.flags.debug;
         }
+        // Our own fullscreen toggle, so entering it goes through the path that
+        // re-takes pointer lock afterwards. The browser's own F11 bypasses us
+        // entirely, which is why the fullscreenchange listener exists too.
+        if (input.actionPressed('fullscreen')) input.toggleFullscreen();
       }
 
       // Gamepads are polled, not evented — the API only exposes snapshots.
