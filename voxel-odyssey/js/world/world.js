@@ -410,10 +410,21 @@ export class World {
       const id = this.getBlock(ix, iy, iz);
       const targetable = Blocks.isSolid(id) || Blocks.renderType(id) === 'cross';
       if (targetable && id !== ID.AIR) {
+        // Plants and liquids are REPLACEABLE: you build into them, not against
+        // them. Returning block+normal for a tuft of grass aimed the placement
+        // cell back toward the player, where it collided with the player's own
+        // body and was rejected — which is why building on a grassy field
+        // appeared to do nothing at all.
+        const def = Blocks.get(id);
+        const replaceable = def && (def.render === 'cross' || def.liquid);
+        const place = replaceable
+          ? { x: ix, y: iy, z: iz }
+          : { x: ix + nx, y: iy + ny, z: iz + nz };
         return {
           block: { x: ix, y: iy, z: iz },
           normal: { x: nx, y: ny, z: nz },
-          place: { x: ix + nx, y: iy + ny, z: iz + nz },
+          place,
+          replaceable: !!replaceable,
           blockId: id,
         };
       }

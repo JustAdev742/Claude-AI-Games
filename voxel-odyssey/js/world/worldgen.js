@@ -112,19 +112,32 @@ export class WorldGen {
 
   // Temperature/moisture fields, both in [0,1]. Large features so biomes form
   // coherent regions rather than per-block noise.
+  /* Climate frequencies set how BIG biomes are. These were 0.0042/0.0051,
+     which puts a full noise period every ~200 blocks — small enough that a
+     desert threshold is crossed in isolated speckles rather than over a
+     region, producing the scattered sand patches in the middle of grassland.
+     At ~0.0011 a period spans roughly 900 blocks, so a desert forms as one
+     coherent area you walk into and out of.
+
+     fbm output is bell-distributed around 0, not uniform, so the raw range is
+     effectively about [-0.8, 0.8] with most samples near the middle. The
+     0.5 + 0.5*t remap therefore concentrates values around 0.5, which the
+     thresholds below account for. */
   _temperature(wx, wz) {
-    const t = this.tempNoise.fbm2(wx, wz, 3, 0.0042, 2.0, 0.5);
-    return clamp(0.5 + 0.5 * t, 0, 1);
+    const t = this.tempNoise.fbm2(wx, wz, 3, 0.0011, 2.0, 0.5);
+    return clamp(0.5 + 0.62 * t, 0, 1);
   }
   _moisture(wx, wz) {
-    const m = this.moistNoise.fbm2(wx, wz, 3, 0.0051, 2.0, 0.5);
-    return clamp(0.5 + 0.5 * m, 0, 1);
+    const m = this.moistNoise.fbm2(wx, wz, 3, 0.0013, 2.0, 0.5);
+    return clamp(0.5 + 0.62 * m, 0, 1);
   }
 
   // A separate low-frequency "continent" field decides land vs. ocean so that
   // oceans appear as large basins instead of wherever height happens to dip.
   _continent(wx, wz) {
-    return this.heightNoise.fbm2(wx, wz, 4, 0.0028, 2.0, 0.5); // ~[-1,1]
+    // Also lowered for scale: this decides where oceans and highlands sit, so
+    // it must vary more slowly than the terrain detail riding on top of it.
+    return this.heightNoise.fbm2(wx, wz, 4, 0.0011, 2.0, 0.5); // ~[-1,1]
   }
 
   // Choose a biome string from climate + elevation signal.
@@ -137,9 +150,13 @@ export class WorldGen {
     // Near sea level with low continent → beaches handled later by height,
     // but classify low-lying very-near-shore as beach when slightly positive.
     if (continent < -0.24) return 'beach';
-    if (temperature > 0.66 && moisture < 0.38) return 'desert';
-    if (temperature < 0.26) return 'snow';
-    if (moisture > 0.58) return 'forest';
+    // Deserts demand a decisively hot, dry region. The old 0.66/0.38 pair sat
+    // close enough to the distribution's centre that the boundary was crossed
+    // constantly, scattering sand everywhere; these thresholds are far enough
+    // into the tails that a desert is a place, not a speckle.
+    if (temperature > 0.74 && moisture < 0.30) return 'desert';
+    if (temperature < 0.22) return 'snow';
+    if (moisture > 0.62) return 'forest';
     return 'plains';
   }
 
@@ -181,6 +198,20 @@ export class WorldGen {
   // Blends the neighbouring-biome parameters using smooth climate weights so
   // terrain transitions between biomes without hard seams, then layers in the
   // shared rolling + ridge fields.
+  /* Is open water within a few blocks? Used to gate beach sand so it only
+     appears where land actually meets sea. Sampled sparsely on a ring rather
+     than a full disc: a beach band is only a couple of blocks wide, so four
+     probes at two radii are enough to catch a real shoreline while costing a
+     fraction of a full neighbourhood scan. */
+  _nearWater(wx, wz) {
+    for (const r of [3, 6]) {
+      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r]]) {
+        if (this.heightAt(wx + dx, wz + dz) < SEA) return true;
+      }
+    }
+    return false;
+  }
+
   _computeHeight(wx, wz, biome, continent, temperature, moisture) {
     // Blend the height parameters with those of nearby columns so terrain
     // transitions smoothly across biome borders instead of forming a hard step.
@@ -286,7 +317,14 @@ export class WorldGen {
 
     // Is this surface a "beach"? Sand replaces grass/dirt right around the
     // waterline on biomes that allow beaches.
-    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL;
+    // A beach requires actual WATER nearby, not merely an elevation that
+    // happens to fall in the coastal band. Testing height alone turned every
+    // inland hollow that dipped to y<=BEACH_LEVEL into a sand patch in the
+    // middle of grassland — the "random sand" artifact. Terrain height is a
+    // pure function of world coordinates, so probing neighbours is
+    // deterministic and identical from either side of a chunk border.
+    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL
+      && this._nearWater(wx, wz);
 
     // Determine the surface + subsurface block ids for this column.
     let surfaceId = b.surface;

@@ -32039,6 +32039,30 @@ var FACES = [
   { dir: [0, 0, -1], corners: [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]] }
   // -Z
 ];
+function buildFaceUVs() {
+  const table = [];
+  for (const face of FACES) {
+    const [dx, dy, dz] = face.dir;
+    const uvs = [];
+    for (const [cx, cy, cz] of face.corners) {
+      let u, v;
+      if (dy !== 0) {
+        u = cx;
+        v = dy > 0 ? 1 - cz : cz;
+      } else if (dx !== 0) {
+        v = cy;
+        u = dx > 0 ? 1 - cz : cz;
+      } else {
+        v = cy;
+        u = dz > 0 ? cx : 1 - cx;
+      }
+      uvs.push(u, v);
+    }
+    table.push(uvs);
+  }
+  return table;
+}
+var FACE_UVS = buildFaceUVs();
 var ID = {
   AIR: 0,
   STONE: 1,
@@ -33350,18 +33374,29 @@ var WorldGen = class {
   /* --- climate + biome selection --------------------------------------- */
   // Temperature/moisture fields, both in [0,1]. Large features so biomes form
   // coherent regions rather than per-block noise.
+  /* Climate frequencies set how BIG biomes are. These were 0.0042/0.0051,
+       which puts a full noise period every ~200 blocks — small enough that a
+       desert threshold is crossed in isolated speckles rather than over a
+       region, producing the scattered sand patches in the middle of grassland.
+       At ~0.0011 a period spans roughly 900 blocks, so a desert forms as one
+       coherent area you walk into and out of.
+  
+       fbm output is bell-distributed around 0, not uniform, so the raw range is
+       effectively about [-0.8, 0.8] with most samples near the middle. The
+       0.5 + 0.5*t remap therefore concentrates values around 0.5, which the
+       thresholds below account for. */
   _temperature(wx, wz) {
-    const t = this.tempNoise.fbm2(wx, wz, 3, 42e-4, 2, 0.5);
-    return clamp2(0.5 + 0.5 * t, 0, 1);
+    const t = this.tempNoise.fbm2(wx, wz, 3, 11e-4, 2, 0.5);
+    return clamp2(0.5 + 0.62 * t, 0, 1);
   }
   _moisture(wx, wz) {
-    const m = this.moistNoise.fbm2(wx, wz, 3, 51e-4, 2, 0.5);
-    return clamp2(0.5 + 0.5 * m, 0, 1);
+    const m = this.moistNoise.fbm2(wx, wz, 3, 13e-4, 2, 0.5);
+    return clamp2(0.5 + 0.62 * m, 0, 1);
   }
   // A separate low-frequency "continent" field decides land vs. ocean so that
   // oceans appear as large basins instead of wherever height happens to dip.
   _continent(wx, wz) {
-    return this.heightNoise.fbm2(wx, wz, 4, 28e-4, 2, 0.5);
+    return this.heightNoise.fbm2(wx, wz, 4, 11e-4, 2, 0.5);
   }
   // Choose a biome string from climate + elevation signal.
   _classify(temperature, moisture, continent) {
@@ -33370,9 +33405,9 @@ var WorldGen = class {
       return temperature < 0.32 ? "snow" : "mountains";
     }
     if (continent < -0.24) return "beach";
-    if (temperature > 0.66 && moisture < 0.38) return "desert";
-    if (temperature < 0.26) return "snow";
-    if (moisture > 0.58) return "forest";
+    if (temperature > 0.74 && moisture < 0.3) return "desert";
+    if (temperature < 0.22) return "snow";
+    if (moisture > 0.62) return "forest";
     return "plains";
   }
   biomeAt(wx, wz) {
@@ -33408,6 +33443,19 @@ var WorldGen = class {
   // Blends the neighbouring-biome parameters using smooth climate weights so
   // terrain transitions between biomes without hard seams, then layers in the
   // shared rolling + ridge fields.
+  /* Is open water within a few blocks? Used to gate beach sand so it only
+     appears where land actually meets sea. Sampled sparsely on a ring rather
+     than a full disc: a beach band is only a couple of blocks wide, so four
+     probes at two radii are enough to catch a real shoreline while costing a
+     fraction of a full neighbourhood scan. */
+  _nearWater(wx, wz) {
+    for (const r of [3, 6]) {
+      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r]]) {
+        if (this.heightAt(wx + dx, wz + dz) < SEA) return true;
+      }
+    }
+    return false;
+  }
   _computeHeight(wx, wz, biome, continent, temperature, moisture) {
     const b = this._blendedParams(wx, wz, biome);
     const roll = this.hillNoise.fbm2(wx, wz, 4, 0.012, 2, 0.5);
@@ -33484,7 +33532,7 @@ var WorldGen = class {
     const surfaceY = info.height;
     const biome = info.biome;
     const b = BIOMES[biome] || BIOMES.plains;
-    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL;
+    const isShore = b.beach && surfaceY >= SEA - 1 && surfaceY <= BEACH_LEVEL && this._nearWater(wx, wz);
     let surfaceId = b.surface;
     let subId = b.sub;
     if (isShore) {
@@ -33924,7 +33972,7 @@ function buildAOOffsets() {
 var TINT_AMOUNT = 0.045;
 var TINT_SEED = 1337;
 var WHITE = [1, 1, 1];
-var FACE_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
+var CROSS_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
 function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
   const ao = opts.ao !== false;
@@ -34123,7 +34171,7 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, layer) {
   const dir = face.dir;
   const corners = face.corners;
   const startVert = bucket.positions.length / 3;
-  const uvs = FACE_UVS;
+  const uvs = FACE_UVS[f];
   const ti = layer;
   for (let c = 0; c < 4; c++) {
     const cor = corners[c];
@@ -34147,7 +34195,7 @@ function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, layer) {
   bucket.positions.push(p1[0], p1[1], p1[2]);
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
-  const uvs = FACE_UVS;
+  const uvs = CROSS_UVS;
   const ti = layer;
   for (let i = 0; i < 4; i++) {
     bucket.normals.push(n[0], n[1], n[2]);
@@ -35323,10 +35371,14 @@ var World = class {
       const id = this.getBlock(ix, iy, iz);
       const targetable = blocks_default.isSolid(id) || blocks_default.renderType(id) === "cross";
       if (targetable && id !== ID.AIR) {
+        const def2 = blocks_default.get(id);
+        const replaceable = def2 && (def2.render === "cross" || def2.liquid);
+        const place = replaceable ? { x: ix, y: iy, z: iz } : { x: ix + nx, y: iy + ny, z: iz + nz };
         return {
           block: { x: ix, y: iy, z: iz },
           normal: { x: nx, y: ny, z: nz },
-          place: { x: ix + nx, y: iy + ny, z: iz + nz },
+          place,
+          replaceable: !!replaceable,
           blockId: id
         };
       }
@@ -35608,7 +35660,6 @@ var World = class {
 };
 
 // js/render/blockModel.js
-var FACE_UVS2 = [0, 1, 0, 0, 1, 0, 1, 1];
 function buildBlockGeometry(blockId, atlas, size = 1) {
   const positions = [];
   const normals = [];
@@ -35624,6 +35675,7 @@ function buildBlockGeometry(blockId, atlas, size = 1) {
     const dir = face.dir;
     const shade2 = FACE_SHADE[f];
     const layer = atlas ? atlas.layerFor(blockId, f) : -1;
+    const faceUV = FACE_UVS[f];
     const base = layer >= 0 ? [1, 1, 1] : blocks_default.faceColor(blockId, f);
     const r = base[0] * shade2, g = base[1] * shade2, b = base[2] * shade2;
     const start = positions.length / 3;
@@ -35634,7 +35686,7 @@ function buildBlockGeometry(blockId, atlas, size = 1) {
       colors.push(r, g, b);
       ao.push(1);
       light.push(1, 0);
-      uv.push(FACE_UVS2[c * 2], FACE_UVS2[c * 2 + 1]);
+      uv.push(faceUV[c * 2], faceUV[c * 2 + 1]);
       texIdx.push(layer);
     }
     indices.push(start, start + 1, start + 2, start, start + 2, start + 3);

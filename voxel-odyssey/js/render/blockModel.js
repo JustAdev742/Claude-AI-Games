@@ -26,11 +26,7 @@
    ========================================================================= */
 
 import * as THREE from 'three';
-import Blocks, { FACES, FACE_SHADE } from '../world/blocks.js';
-
-// Same corner order as the mesher: (top-left, bottom-left, bottom-right,
-// top-right) of each face.
-const FACE_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
+import Blocks, { FACES, FACE_SHADE, FACE_UVS } from '../world/blocks.js';
 
 /**
  * Geometry for one block, centred on the origin.
@@ -57,6 +53,7 @@ export function buildBlockGeometry(blockId, atlas, size = 1) {
     const dir = face.dir;
     const shade = FACE_SHADE[f];
     const layer = atlas ? atlas.layerFor(blockId, f) : -1;
+    const faceUV = FACE_UVS[f];
 
     // Textured faces carry a neutral vertex colour so the shader multiplies
     // the texture by shading alone; untextured ones carry the block colour,
@@ -74,7 +71,7 @@ export function buildBlockGeometry(blockId, atlas, size = 1) {
       colors.push(r, g, b);
       ao.push(1.0);                        // nothing occludes a held block
       light.push(1.0, 0.0);                // overwritten by setBlockGeometryLight
-      uv.push(FACE_UVS[c * 2], FACE_UVS[c * 2 + 1]);
+      uv.push(faceUV[c * 2], faceUV[c * 2 + 1]);
       texIdx.push(layer);
     }
     indices.push(start, start + 1, start + 2, start, start + 2, start + 3);

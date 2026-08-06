@@ -31,6 +31,53 @@ export const FACES = [
   { dir: [0, 0, -1], corners: [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]] }, // -Z
 ];
 
+/* Per-corner UVs for each face, DERIVED from the face geometry rather than
+   assumed from corner order.
+
+   The FACES corner lists below are not consistent about how they walk a quad:
+   the +X/-X faces go (top, bottom, bottom, top) while +Z/-Z go
+   (top, top, bottom, bottom). A single fixed UV array therefore fits the X
+   faces and rotates the Z faces 90 degrees — which put the grass lip on the
+   left or right edge of half the blocks in the world and read as textures
+   being randomly upside down.
+
+   Computing UVs from each corner's position in the face's own plane makes
+   that class of bug impossible: v always follows world +Y on side faces, and
+   u always runs left-to-right as seen from OUTSIDE the block, whatever order
+   the corners happen to be listed in. */
+function buildFaceUVs() {
+  const table = [];
+  for (const face of FACES) {
+    const [dx, dy, dz] = face.dir;
+    const uvs = [];
+    for (const [cx, cy, cz] of face.corners) {
+      let u, v;
+      if (dy !== 0) {
+        // Horizontal face: the plane is x/z. Mirror on the underside so the
+        // texture isn't reversed when seen from below.
+        u = cx;
+        v = dy > 0 ? 1 - cz : cz;
+      } else if (dx !== 0) {
+        // Facing along X: v is height, u runs along Z (mirrored on +X so it
+        // reads left-to-right from outside).
+        v = cy;
+        u = dx > 0 ? 1 - cz : cz;
+      } else {
+        // Facing along Z: v is height, u runs along X.
+        v = cy;
+        u = dz > 0 ? cx : 1 - cx;
+      }
+      uvs.push(u, v);
+    }
+    table.push(uvs);
+  }
+  return table;
+}
+
+// Per-face, per-corner UVs (8 floats per face: u,v for each of 4 corners).
+export const FACE_UVS = buildFaceUVs();
+
+
 // ---- numeric ids (also exported as a frozen object) ----------------------
 export const ID = {
   AIR: 0,

@@ -16,7 +16,7 @@
    ========================================================================= */
 
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ, CHUNK_VOL, localIndex } from './constants.js';
-import Blocks, { ID, FACES, FACE_SHADE } from './blocks.js';
+import Blocks, { ID, FACES, FACE_SHADE, FACE_UVS } from './blocks.js';
 import { tintVariation } from '../core/utils.js';
 
 /* =========================================================================
@@ -238,10 +238,11 @@ const TINT_SEED = 1337;
 // multiplies the texture by shading alone.
 const WHITE = [1, 1, 1];
 
-// UVs for a quad's four corners, in FACES corner order
-// (top-left, bottom-left, bottom-right, top-right). Constant because a
-// texture array gives every tile the full 0..1 range.
-const FACE_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
+// UVs for the crossed quads used by plants. Those are built here with an
+// explicit corner order (top-left, bottom-left, bottom-right, top-right)
+// rather than coming from the FACES table, so they get their own constant.
+// Cube faces use the per-face FACE_UVS derived in blocks.js.
+const CROSS_UVS = [0, 1, 0, 0, 1, 0, 1, 1];
 
 export function meshChunk(chunk, getBlock, opts) {
   opts = opts || {};
@@ -523,9 +524,10 @@ function pushFace(bucket, f, lx, ly, lz, r, g, b, dropTop, aoArr, lit, layer) {
 
   // Quad corner order is (top-left, bottom-left, bottom-right, top-right),
   // so UVs walk the tile rect in the same order.
-  // Every texture owns a full array layer, so the UV rect is always the whole
-  // tile. Corner order is (top-left, bottom-left, bottom-right, top-right).
-  const uvs = FACE_UVS;
+  // Per-face UVs, derived in blocks.js from each face's own geometry. A single
+  // shared array cannot work here: the FACES corner lists walk quads in
+  // different orders per axis, so one fixed mapping rotates half the faces.
+  const uvs = FACE_UVS[f];
   const ti = layer;
 
   for (let c = 0; c < 4; c++) {
@@ -557,7 +559,7 @@ function addQuad(bucket, p0, p1, p2, p3, n, r, g, b, lit, layer) {
   bucket.positions.push(p2[0], p2[1], p2[2]);
   bucket.positions.push(p3[0], p3[1], p3[2]);
 
-  const uvs = FACE_UVS;
+  const uvs = CROSS_UVS;
   const ti = layer;
 
   for (let i = 0; i < 4; i++) {
