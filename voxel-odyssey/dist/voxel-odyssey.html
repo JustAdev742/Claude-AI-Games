@@ -36679,16 +36679,60 @@ var Mob = class {
   /* ----------------------------------------------------------------------
      Mesh construction — a handful of boxes per type.
      ---------------------------------------------------------------------- */
+  /* One material per MOB, not per box.
+     Colour comes from baked vertex colours instead, so a mob is a handful of
+     draw calls sharing a single material rather than ~10 separate ones — and
+     tinting the whole creature (damage flash, voxel light) is one uniform
+     write instead of walking every part. */
+  _material() {
+    if (!this._mat) {
+      this._mat = new MeshLambertMaterial({ vertexColors: true });
+    }
+    return this._mat;
+  }
+  _paint(geo, color) {
+    const c = new Color(color);
+    const n = geo.attributes.position.count;
+    const arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      arr[i * 3] = c.r;
+      arr[i * 3 + 1] = c.g;
+      arr[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute("color", new BufferAttribute(arr, 3));
+    return c;
+  }
   _addBox(w, h, d, x, y, z, color, role = "body") {
     const geo = new BoxGeometry(w, h, d);
-    const mat = new MeshLambertMaterial({ color });
-    const m = new Mesh(geo, mat);
+    const base = this._paint(geo, color);
+    const m = new Mesh(geo, this._material());
     m.position.set(x, y, z);
     this.mesh.add(m);
-    const rec = { mesh: m, baseColor: new Color(color), role };
+    const rec = { mesh: m, baseColor: base, role, pivot: null };
     this._parts.push(rec);
     if (role === "leg") this._legParts.push(rec);
     return m;
+  }
+  /* A limb that swings from its TOP end.
+       Rotating a box about its own origin spins it around its middle, so legs
+       scissored at the knee instead of striding from the hip — the single
+       biggest reason the mobs read as lifeless. The mesh therefore hangs inside
+       a pivot Group placed at the joint, and animation rotates the pivot.
+  
+       `topY` is the joint height in mob-local space; the limb hangs down from it. */
+  _addLimb(w, h, d, x, topY, z, color, role) {
+    const pivot = new Group();
+    pivot.position.set(x, topY, z);
+    this.mesh.add(pivot);
+    const geo = new BoxGeometry(w, h, d);
+    const base = this._paint(geo, color);
+    const m = new Mesh(geo, this._material());
+    m.position.y = -h / 2;
+    pivot.add(m);
+    const rec = { mesh: m, baseColor: base, role, pivot };
+    this._parts.push(rec);
+    if (role === "leg") this._legParts.push(rec);
+    return pivot;
   }
   _buildMesh() {
     const def2 = this.def;
@@ -36701,13 +36745,14 @@ var Mob = class {
       const torsoH = H * 0.35;
       const headS = H * 0.2;
       const legW = W * 0.32;
-      this._addBox(legW, legH, legW, -W * 0.18, legH * 0.5, 0, col, "leg");
-      this._addBox(legW, legH, legW, W * 0.18, legH * 0.5, 0, col, "leg");
+      this._addLimb(legW, legH, legW, -W * 0.18, legH, 0, col, "leg");
+      this._addLimb(legW, legH, legW, W * 0.18, legH, 0, col, "leg");
       const torso = this._addBox(W * 0.7, torsoH, W * 0.42, 0, legH + torsoH * 0.5, 0, acc, "body");
       torso.userData.role = "body";
       const armH = torsoH * 1.05;
-      this._addBox(legW * 0.7, armH, legW * 0.7, -(W * 0.45), legH + torsoH * 0.5, 0.05, col, "arm");
-      this._addBox(legW * 0.7, armH, legW * 0.7, W * 0.45, legH + torsoH * 0.5, 0.05, col, "arm");
+      const shoulderY = legH + torsoH;
+      this._addLimb(legW * 0.7, armH, legW * 0.7, -(W * 0.45), shoulderY, 0.05, col, "arm");
+      this._addLimb(legW * 0.7, armH, legW * 0.7, W * 0.45, shoulderY, 0.05, col, "arm");
       this._addBox(headS * 1.4, headS * 1.4, headS * 1.4, 0, legH + torsoH + headS * 0.7, 0, col, "head");
     } else if (def2.legs === 8) {
       const bodyY = H * 0.5;
@@ -36730,14 +36775,15 @@ var Mob = class {
       const bodyY = legH + bodyH * 0.5;
       if (quad) {
         const fz = bodyD * 0.32, lx = bodyW * 0.32;
-        this._addBox(legW, legH, legW, -lx, legH * 0.5, fz, def2.accent ? acc : col, "leg");
-        this._addBox(legW, legH, legW, lx, legH * 0.5, fz, def2.accent ? acc : col, "leg");
-        this._addBox(legW, legH, legW, -lx, legH * 0.5, -fz, def2.accent ? acc : col, "leg");
-        this._addBox(legW, legH, legW, lx, legH * 0.5, -fz, def2.accent ? acc : col, "leg");
+        const legCol = def2.accent ? acc : col;
+        this._addLimb(legW, legH, legW, -lx, legH, fz, legCol, "leg");
+        this._addLimb(legW, legH, legW, lx, legH, fz, legCol, "leg");
+        this._addLimb(legW, legH, legW, -lx, legH, -fz, legCol, "leg");
+        this._addLimb(legW, legH, legW, lx, legH, -fz, legCol, "leg");
       } else {
         const lx = bodyW * 0.22;
-        this._addBox(legW * 0.7, legH, legW * 0.7, -lx, legH * 0.5, 0, acc, "leg");
-        this._addBox(legW * 0.7, legH, legW * 0.7, lx, legH * 0.5, 0, acc, "leg");
+        this._addLimb(legW * 0.7, legH, legW * 0.7, -lx, legH, 0, acc, "leg");
+        this._addLimb(legW * 0.7, legH, legW * 0.7, lx, legH, 0, acc, "leg");
       }
       this._addBox(bodyW, bodyH, bodyD, 0, bodyY, 0, col, "body");
       const headS = W * (quad ? 0.5 : 0.42);
@@ -36838,7 +36884,6 @@ var Mob = class {
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
     if (this.hurtFlash > 0) {
       this.hurtFlash -= dt;
-      if (this.hurtFlash <= 0) this._setFlash(false);
     }
     this.despawnTimer += dt;
     this._checkInWater();
@@ -36995,22 +37040,32 @@ var Mob = class {
       this._passiveAI(dt);
       return;
     }
-    let dx = pp.x - this.position.x;
-    let dz = pp.z - this.position.z;
-    const len = Math.hypot(dx, dz) || 1;
-    dx /= len;
-    dz /= len;
-    if (horiz > ATTACK_RANGE && this._hazardAhead(dx, dz)) {
-      const sideX = -dz, sideZ = dx;
-      if (!this._hazardAhead(sideX, sideZ)) {
-        dx = sideX;
-        dz = sideZ;
-      } else if (!this._hazardAhead(-sideX, -sideZ)) {
-        dx = -sideX;
-        dz = -sideZ;
-      } else {
-        dx = 0;
-        dz = 0;
+    const node = this._followPath(dt, pp, horiz);
+    let dx, dz;
+    if (node) {
+      dx = node.x - this.position.x;
+      dz = node.z - this.position.z;
+      const nl = Math.hypot(dx, dz) || 1;
+      dx /= nl;
+      dz /= nl;
+    } else {
+      dx = pp.x - this.position.x;
+      dz = pp.z - this.position.z;
+      const len = Math.hypot(dx, dz) || 1;
+      dx /= len;
+      dz /= len;
+      if (horiz > ATTACK_RANGE && this._hazardAhead(dx, dz)) {
+        const sideX = -dz, sideZ = dx;
+        if (!this._hazardAhead(sideX, sideZ)) {
+          dx = sideX;
+          dz = sideZ;
+        } else if (!this._hazardAhead(-sideX, -sideZ)) {
+          dx = -sideX;
+          dz = -sideZ;
+        } else {
+          dx = 0;
+          dz = 0;
+        }
       }
     }
     this.wishX = dx;
@@ -37030,6 +37085,51 @@ var Mob = class {
         this.rangedTimer = 2.2;
       }
     }
+  }
+  /* Maintain a path toward `target` and return the waypoint to walk to.
+       Returns null when we have no usable path and the caller should steer.
+  
+       Repathing is throttled and staggered: recomputing every frame would be
+       wasteful, and recomputing every mob on the SAME frame produces a periodic
+       spike. The mob's id offsets its schedule so the cost spreads out. */
+  _followPath(dt, target, horiz) {
+    const em = this.game && this.game.entities;
+    const pf = em && em.pathfinder;
+    if (!pf) return null;
+    if (horiz < 2.5) {
+      this._path = null;
+      return null;
+    }
+    this._repathTimer = (this._repathTimer || 0) - dt;
+    const targetMoved = !this._pathGoal || dist2D(this._pathGoal.x, this._pathGoal.z, target.x, target.z) > 2.5;
+    if (this._repathTimer <= 0 || targetMoved) {
+      this._repathTimer = 0.6 + this.id % 7 * 0.05;
+      if (em.pathBudget > 0) {
+        em.pathBudget--;
+        const res = pf.find(this.position, target, {
+          height: Math.max(1, Math.ceil(this.height))
+        });
+        this._path = res.path.length ? res.path : null;
+        this._pathGoal = { x: target.x, z: target.z };
+        this._pathIndex = 0;
+      }
+    }
+    const path = this._path;
+    if (!path || this._pathIndex >= path.length) return null;
+    let node = path[this._pathIndex];
+    while (node && dist2D(this.position.x, this.position.z, node.x, node.z) < 0.6) {
+      this._pathIndex++;
+      node = path[this._pathIndex];
+    }
+    if (!node) {
+      this._path = null;
+      return null;
+    }
+    if (node.y > this.position.y + 0.4 && this.onGround && this.jumpCooldown <= 0) {
+      this.velocity.y = JUMP_VELOCITY;
+      this.jumpCooldown = 0.4;
+    }
+    return node;
   }
   _meleePlayer(player) {
     try {
@@ -37060,25 +37160,65 @@ var Mob = class {
      Animation — gentle leg swing while moving, plus hurt flash handling.
      ---------------------------------------------------------------------- */
   _animate(dt) {
-    const swingSpeed = 9;
-    const amp = 0.5 * this.moveAmount;
-    const phase = this.age * swingSpeed;
+    const speed = Math.hypot(this.velocity.x, this.velocity.z);
+    const swingSpeed = 5 + speed * 2.2;
+    const amp = 0.55 * this.moveAmount;
+    this._gaitPhase = (this._gaitPhase || 0) + dt * swingSpeed;
+    const phase = this._gaitPhase;
     const legs = this._legParts;
     for (let i = 0; i < legs.length; i++) {
-      const sign2 = i % 2 === 0 ? 1 : -1;
-      legs[i].mesh.rotation.x = Math.sin(phase) * amp * sign2;
+      const sign2 = legs.length >= 4 ? i % 2 === (i / 2 | 0) % 2 ? 1 : -1 : i % 2 === 0 ? 1 : -1;
+      const rec = legs[i];
+      const target = rec.pivot || rec.mesh;
+      target.rotation.x = Math.sin(phase) * amp * sign2;
     }
     for (const rec of this._parts) {
-      if (rec.role === "arm") {
-        rec.mesh.rotation.x = -Math.sin(phase) * amp * 0.9;
-      }
+      if (rec.role !== "arm") continue;
+      const target = rec.pivot || rec.mesh;
+      const reach = this.def.humanoid && this.type === "zombie" ? -1.35 : 0;
+      target.rotation.x = reach - Math.sin(phase) * amp * 0.9;
     }
     const head = this._parts.find((p) => p.role === "head");
     if (head) {
+      const idle = 1 - this.moveAmount;
       head.mesh.rotation.z = Math.sin(this.age * 1.7 + this.id) * 0.04;
+      head.mesh.rotation.y = Math.sin(this.age * 0.6 + this.id * 2.1) * 0.35 * idle;
+      head.mesh.position.y = (head.mesh.userData.baseY !== void 0 ? head.mesh.userData.baseY : head.mesh.userData.baseY = head.mesh.position.y) + Math.sin(this.age * 2.2 + this.id) * 0.012 * idle;
+    }
+    this._applyTint();
+  }
+  /* Tint the shared material by the voxel light at the mob's head, so a
+     creature standing in a cave is dark. Without this mobs are lit only by
+     the sky's directional light, which voxels cannot occlude — the same
+     "sun through walls" class of bug the terrain shader was written to fix.
+     The damage flash multiplies into the same colour. */
+  _applyTint() {
+    const mat = this._mat;
+    if (!mat) return;
+    const world = this.game && this.game.world;
+    let level = 1;
+    if (world && typeof world.getLightByte === "function") {
+      const packed = world.getLightByte(
+        Math.floor(this.position.x),
+        Math.floor(this.position.y + this.height * 0.8),
+        Math.floor(this.position.z)
+      );
+      const sky = (packed >> 4 & 15) / 15;
+      const blk = (packed & 15) / 15;
+      const daylight = world.uniforms && world.uniforms.uDaylight ? world.uniforms.uDaylight.value : 1;
+      level = Math.max(sky * daylight, blk);
+      level = Math.max(0.08, Math.pow(level, 1.45));
+    }
+    if (this.hurtFlash > 0) {
+      const t = Math.min(1, this.hurtFlash / HURT_FLASH_TIME);
+      mat.color.setRGB(level + (1 - level) * t, level * (1 - t * 0.75), level * (1 - t * 0.75));
+    } else {
+      mat.color.setRGB(level, level, level);
     }
   }
-  _setFlash(on) {
+  // Flash is applied through the shared material tint in _applyTint(); this
+  // remains only for any caller that toggles it explicitly.
+  _setFlashLegacy(on) {
     for (const rec of this._parts) {
       const mat = rec.mesh.material;
       if (!mat || !mat.color) continue;
@@ -37094,7 +37234,6 @@ var Mob = class {
     amount = Math.max(0, amount || 0);
     if (amount <= 0) return;
     this.health -= amount;
-    this._setFlash(true);
     this.hurtFlash = HURT_FLASH_TIME;
     const src = source && (source.position || source);
     if (src && typeof src.x === "number") {
@@ -37227,6 +37366,214 @@ var Mob = class {
   }
 };
 
+// js/entities/pathfinder.js
+var COST_STEP = 1;
+var COST_DIAGONAL = 1.414;
+var COST_JUMP = 2.4;
+var COST_FALL = 1.6;
+var COST_WATER = 3;
+var DEFAULT_LIMITS = {
+  maxNodes: 900,
+  // A* expansions before giving up
+  maxRange: 40,
+  // blocks from the start; beyond this, give up early
+  maxFall: 4,
+  // survivable drop in blocks
+  maxJump: 1
+  // step-up height (1 = Minecraft-like)
+};
+var MinHeap = class {
+  constructor() {
+    this.items = [];
+  }
+  get size() {
+    return this.items.length;
+  }
+  push(node) {
+    const a = this.items;
+    a.push(node);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = i - 1 >> 1;
+      if (a[p].f <= a[i].f) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.items;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length > 0) {
+      a[0] = last;
+      let i = 0;
+      for (; ; ) {
+        const l = i * 2 + 1, r = l + 1;
+        let s = i;
+        if (l < a.length && a[l].f < a[s].f) s = l;
+        if (r < a.length && a[r].f < a[s].f) s = r;
+        if (s === i) break;
+        [a[s], a[i]] = [a[i], a[s]];
+        i = s;
+      }
+    }
+    return top;
+  }
+};
+var NEIGHBOURS2 = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1]
+];
+var Pathfinder = class {
+  /**
+   * @param {object} world  needs getBlock(x,y,z)
+   */
+  constructor(world, limits = {}) {
+    this.world = world;
+    this.limits = Object.assign({}, DEFAULT_LIMITS, limits);
+    this.stats = { searches: 0, nodesExpanded: 0, partial: 0, failed: 0 };
+  }
+  /* ---- terrain queries ---- */
+  _isSolid(x, y, z) {
+    if (y < 0) return true;
+    if (y >= CHUNK_SY) return false;
+    const id = this.world.getBlock(x, y, z);
+    if (id === ID.AIR || id === void 0 || id === null) return false;
+    const d = blocks_default.get(id);
+    return d.solid && d.render !== "cross";
+  }
+  _isLiquid(x, y, z) {
+    if (y < 0 || y >= CHUNK_SY) return false;
+    return blocks_default.isLiquid(this.world.getBlock(x, y, z));
+  }
+  /* Can a body `height` blocks tall occupy the space with feet at (x,y,z)? */
+  _hasClearance(x, y, z, height) {
+    for (let i = 0; i < height; i++) {
+      if (this._isSolid(x, y + i, z)) return false;
+    }
+    return true;
+  }
+  /**
+   * The y a mob's feet rest at in column (x,z), searching near `fromY`.
+   * Returns null when there is nowhere to stand.
+   */
+  groundY(x, z, fromY, height, limits) {
+    const maxFall = (limits || this.limits).maxFall;
+    const maxJump = (limits || this.limits).maxJump;
+    const top = Math.min(CHUNK_SY - 1, fromY + maxJump);
+    const bottom = Math.max(0, fromY - maxFall - 1);
+    for (let y = top; y >= bottom; y--) {
+      if (!this._isSolid(x, y - 1, z)) continue;
+      if (!this._hasClearance(x, y, z, height)) continue;
+      return y;
+    }
+    for (let y = top; y >= bottom; y--) {
+      if (this._isLiquid(x, y, z) && this._hasClearance(x, y + 1, z, height - 1)) return y;
+    }
+    return null;
+  }
+  /**
+   * Find a path from start to goal.
+   *
+   * @param {object} start  {x,y,z} world position (feet)
+   * @param {object} goal   {x,y,z} world position
+   * @param {object} opts   { height, limits }
+   * @returns {{path: Array<{x,y,z}>, complete: boolean, nodes: number}}
+   *          `path` is in world coordinates, start-exclusive. Empty when no
+   *          route exists at all.
+   */
+  find(start, goal, opts = {}) {
+    const height = Math.max(1, Math.ceil(opts.height || 2));
+    const limits = Object.assign({}, this.limits, opts.limits);
+    this.stats.searches++;
+    const sx = Math.floor(start.x), sz = Math.floor(start.z);
+    const gx = Math.floor(goal.x), gz = Math.floor(goal.z);
+    const sy = this.groundY(sx, sz, Math.floor(start.y), height, limits);
+    if (sy === null) {
+      this.stats.failed++;
+      return { path: [], complete: false, nodes: 0 };
+    }
+    const gy = this.groundY(gx, gz, Math.floor(goal.y), height, limits);
+    const goalY = gy === null ? Math.floor(goal.y) : gy;
+    const key = (x, y, z) => `${x},${y},${z}`;
+    const h = (x, y, z) => {
+      const dx = Math.abs(x - gx), dz = Math.abs(z - gz);
+      const dy = Math.abs(y - goalY);
+      return dx + dz + (COST_DIAGONAL - 2) * Math.min(dx, dz) + dy * 0.5;
+    };
+    const open = new MinHeap();
+    const seen = /* @__PURE__ */ new Map();
+    const startNode = { x: sx, y: sy, z: sz, g: 0, f: h(sx, sy, sz), parent: null };
+    open.push(startNode);
+    seen.set(key(sx, sy, sz), startNode);
+    let best = startNode;
+    let bestH = startNode.f;
+    let expanded = 0;
+    while (open.size > 0 && expanded < limits.maxNodes) {
+      const cur = open.pop();
+      expanded++;
+      if (cur.x === gx && cur.z === gz && Math.abs(cur.y - goalY) <= 1) {
+        this.stats.nodesExpanded += expanded;
+        return { path: this._reconstruct(cur), complete: true, nodes: expanded };
+      }
+      const curH = h(cur.x, cur.y, cur.z);
+      if (curH < bestH) {
+        bestH = curH;
+        best = cur;
+      }
+      for (const [dx, dz] of NEIGHBOURS2) {
+        const nx = cur.x + dx, nz = cur.z + dz;
+        if (Math.abs(nx - sx) > limits.maxRange || Math.abs(nz - sz) > limits.maxRange) continue;
+        const diagonal = dx !== 0 && dz !== 0;
+        if (diagonal) {
+          if (!this._hasClearance(cur.x + dx, cur.y, cur.z, height)) continue;
+          if (!this._hasClearance(cur.x, cur.y, cur.z + dz, height)) continue;
+        }
+        const ny = this.groundY(nx, nz, cur.y, height, limits);
+        if (ny === null) continue;
+        const rise = ny - cur.y;
+        if (rise > limits.maxJump) continue;
+        if (-rise > limits.maxFall) continue;
+        if (rise > 0 && !this._hasClearance(cur.x, cur.y + rise, cur.z, height)) continue;
+        let step = diagonal ? COST_DIAGONAL : COST_STEP;
+        if (rise > 0) step += COST_JUMP * rise;
+        else if (rise < 0) step += COST_FALL * -rise * 0.5;
+        if (this._isLiquid(nx, ny, nz)) step += COST_WATER;
+        const g = cur.g + step;
+        const k = key(nx, ny, nz);
+        const prev = seen.get(k);
+        if (prev && prev.g <= g) continue;
+        const node = { x: nx, y: ny, z: nz, g, f: g + h(nx, ny, nz), parent: cur };
+        seen.set(k, node);
+        open.push(node);
+      }
+    }
+    this.stats.nodesExpanded += expanded;
+    if (best !== startNode) {
+      this.stats.partial++;
+      return { path: this._reconstruct(best), complete: false, nodes: expanded };
+    }
+    this.stats.failed++;
+    return { path: [], complete: false, nodes: expanded };
+  }
+  _reconstruct(node) {
+    const out = [];
+    let n = node;
+    while (n && n.parent) {
+      out.push({ x: n.x + 0.5, y: n.y, z: n.z + 0.5 });
+      n = n.parent;
+    }
+    out.reverse();
+    return out;
+  }
+};
+
 // js/entities/entityManager.js
 var ITEM_DESPAWN_TIME = 300;
 var ITEM_PICKUP_RANGE = 1.3;
@@ -37236,6 +37583,7 @@ var ITEM_BOB_SPEED = 2.4;
 var ITEM_SPIN_SPEED = 1.6;
 var ITEM_GRAVITY = -18;
 var ITEM_MERGE_RANGE = 0.65;
+var MAX_PATHS_PER_FRAME = 3;
 var SPAWN_INTERVAL = 2;
 var SPAWN_MIN_RADIUS = 14;
 var SPAWN_MAX_RADIUS = 40;
@@ -37257,6 +37605,8 @@ var EntityManager = class {
     this.items = [];
     this._spawnTimer = SPAWN_INTERVAL;
     this._itemIdCounter = 1;
+    this.pathfinder = null;
+    this.pathBudget = 0;
     this._rng = null;
   }
   init() {
@@ -37447,6 +37797,10 @@ var EntityManager = class {
      The per-frame update.
      ---------------------------------------------------------------------- */
   update(dt) {
+    if (!this.pathfinder && this.game && this.game.world) {
+      this.pathfinder = new Pathfinder(this.game.world);
+    }
+    this.pathBudget = MAX_PATHS_PER_FRAME;
     if (!dt || dt <= 0) return;
     if (dt > 0.1) dt = 0.1;
     this._updateMobs(dt);
@@ -42040,6 +42394,182 @@ function setColor(color, rgb2) {
   color.setRGB(rgb2[0], rgb2[1], rgb2[2]);
 }
 
+// js/fx/weather.js
+var PARTICLE_COUNT = 2600;
+var BOX_RADIUS = 16;
+var BOX_HEIGHT = 24;
+var WEATHER = { CLEAR: "clear", RAIN: "rain", SNOW: "snow" };
+var Weather = class {
+  constructor(game) {
+    this.game = game;
+    this.state = WEATHER.CLEAR;
+    this.intensity = 0;
+    this._target = 0;
+    this._clock = 0;
+    this._nextChange = 90 + Math.random() * 120;
+    this.group = null;
+    this.points = null;
+    this.material = null;
+    this._positions = null;
+    this._speeds = null;
+    this._phases = null;
+    this._initialized = false;
+  }
+  init() {
+    if (this._initialized) return this;
+    const scene = this.game && (this.game.scene || this.game.engine && this.game.engine.scene);
+    if (!scene) {
+      this._initialized = true;
+      return this;
+    }
+    this.group = new Group();
+    this.group.name = "weather";
+    this.group.frustumCulled = false;
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const speeds = new Float32Array(PARTICLE_COUNT);
+    const phases = new Float32Array(PARTICLE_COUNT);
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      positions[i * 3] = (Math.random() * 2 - 1) * BOX_RADIUS;
+      positions[i * 3 + 1] = Math.random() * BOX_HEIGHT;
+      positions[i * 3 + 2] = (Math.random() * 2 - 1) * BOX_RADIUS;
+      speeds[i] = 0.7 + Math.random() * 0.6;
+      phases[i] = Math.random() * Math.PI * 2;
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new BufferAttribute(positions, 3));
+    this.material = new PointsMaterial({
+      color: 11193599,
+      size: 0.12,
+      transparent: true,
+      opacity: 0,
+      // Precipitation is in front of terrain when it is between you and the
+      // terrain, so it must depth-test. depthWrite off so particles do not
+      // occlude each other into a solid sheet.
+      depthTest: true,
+      depthWrite: false,
+      fog: true,
+      sizeAttenuation: true
+    });
+    this.points = new Points(geo, this.material);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 5;
+    this.group.add(this.points);
+    scene.add(this.group);
+    this._positions = positions;
+    this._speeds = speeds;
+    this._phases = phases;
+    this._initialized = true;
+    return this;
+  }
+  /* ---- state ---- */
+  setWeather(state, intensity = 1) {
+    this.state = state;
+    this._target = state === WEATHER.CLEAR ? 0 : clamp01(intensity);
+  }
+  isPrecipitating() {
+    return this.state !== WEATHER.CLEAR && this.intensity > 0.05;
+  }
+  /* Temperature at the player, used to pick rain vs snow vs nothing. Falls
+     back to "temperate" when worldgen can't tell us. */
+  _biomeTemperature() {
+    const wg = this.game && this.game.worldgen;
+    const p = this.game && this.game.player;
+    if (!wg || !p || typeof wg.biomeAt !== "function") return 0.5;
+    try {
+      const b = wg.biomeAt(Math.floor(p.position.x), Math.floor(p.position.z));
+      if (!b) return 0.5;
+      if (typeof b.temperature === "number") return b.temperature;
+      const name = String(b.name || b.key || "").toLowerCase();
+      if (/snow|tundra|ice|frozen|peak/.test(name)) return 0.05;
+      if (/desert|badland|savanna/.test(name)) return 0.95;
+      return 0.5;
+    } catch (_) {
+      return 0.5;
+    }
+  }
+  update(dt) {
+    if (!this._initialized || !this.points) return;
+    const player = this.game && this.game.player;
+    if (!player) return;
+    this._clock += dt;
+    if (this._clock >= this._nextChange) {
+      this._clock = 0;
+      this._nextChange = 90 + Math.random() * 180;
+      const roll = Math.random();
+      if (roll < 0.62) this.setWeather(WEATHER.CLEAR);
+      else this.setWeather(WEATHER.RAIN, 0.45 + Math.random() * 0.55);
+    }
+    const temp = this._biomeTemperature();
+    let effective = this.state;
+    if (this.state !== WEATHER.CLEAR) {
+      if (temp > 0.85) effective = WEATHER.CLEAR;
+      else if (temp < 0.2) effective = WEATHER.SNOW;
+      else effective = WEATHER.RAIN;
+    }
+    const wantIntensity = effective === WEATHER.CLEAR ? 0 : this._target;
+    this.intensity += (wantIntensity - this.intensity) * Math.min(1, dt * 0.6);
+    this.material.opacity = this.intensity * (effective === WEATHER.SNOW ? 0.85 : 0.55);
+    this.points.visible = this.material.opacity > 0.01;
+    if (!this.points.visible) return;
+    const snow = effective === WEATHER.SNOW;
+    this.material.color.setHex(snow ? 16777215 : 10470120);
+    this.material.size = snow ? 0.16 : 0.1;
+    const px2 = player.position.x, py2 = player.position.y, pz2 = player.position.z;
+    this.group.position.set(px2, py2, pz2);
+    const pos = this._positions;
+    const speeds = this._speeds;
+    const phases = this._phases;
+    const world = this.game && this.game.world;
+    const fall = (snow ? 3.2 : 14) * dt;
+    const t = this._elapsed = (this._elapsed || 0) + dt;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const o = i * 3;
+      pos[o + 1] -= fall * speeds[i];
+      if (snow) {
+        pos[o] += Math.sin(t * 0.8 + phases[i]) * dt * 0.6;
+        pos[o + 2] += Math.cos(t * 0.6 + phases[i]) * dt * 0.5;
+      }
+      if (pos[o + 1] < -BOX_HEIGHT * 0.35) {
+        pos[o] = (Math.random() * 2 - 1) * BOX_RADIUS;
+        pos[o + 1] = BOX_HEIGHT * 0.65;
+        pos[o + 2] = (Math.random() * 2 - 1) * BOX_RADIUS;
+        if (world && typeof world.heightAt === "function") {
+          const wx = Math.floor(px2 + pos[o]);
+          const wz = Math.floor(pz2 + pos[o + 2]);
+          const h = world.heightAt(wx, wz);
+          const particleWorldY = py2 + pos[o + 1];
+          if (h >= particleWorldY) pos[o + 1] = -BOX_HEIGHT * 2;
+        }
+      }
+    }
+    this.points.geometry.attributes.position.needsUpdate = true;
+  }
+  /* Ambient sound level for the audio system: 0..1. */
+  ambientLevel() {
+    return this.intensity;
+  }
+  currentType() {
+    if (this.intensity <= 0.05) return WEATHER.CLEAR;
+    return this.state;
+  }
+  serialize() {
+    return { state: this.state, intensity: this._target };
+  }
+  load(obj) {
+    if (!obj) return;
+    if (obj.state) this.setWeather(obj.state, obj.intensity != null ? obj.intensity : 1);
+  }
+  dispose() {
+    if (this.points) {
+      this.points.geometry.dispose();
+      if (this.points.parent) this.points.parent.remove(this.points);
+    }
+    if (this.material) this.material.dispose();
+    if (this.group && this.group.parent) this.group.parent.remove(this.group);
+    this._initialized = false;
+  }
+};
+
 // js/ui/hud.js
 var HOTBAR_SLOTS2 = 9;
 var ICON_SIZE = 40;
@@ -43821,6 +44351,7 @@ async function boot() {
     particles: null,
     audio: null,
     sky: null,
+    weather: null,
     hud: null,
     menus: null,
     resources: null,
@@ -43845,6 +44376,7 @@ async function boot() {
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
   game.sky = new Sky(game);
+  game.weather = new Weather(game);
   game.entities = new EntityManager(game);
   game.player = new Player(game);
   game.hud = new HUD(game);
@@ -43861,6 +44393,7 @@ async function boot() {
     "particles",
     "audio",
     "sky",
+    "weather",
     "entities",
     "player",
     "hud",
@@ -44072,6 +44605,7 @@ async function boot() {
       const anchor = state.mode === "play" ? game.player.position : menuCam.center;
       if (game.worldActive) {
         game.sky.update(playing ? dt * state.get("daylightSpeed") : state.mode === "menu" ? dt * 0.3 : 0);
+        if (game.weather) game.weather.update(playing ? dt : 0);
         if (playing) {
           game.player.update(dt);
           game.entities.update(dt);

@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import { Mob, MOB_TYPES } from './mob.js';
+import { Pathfinder } from './pathfinder.js';
 import Items from '../items/items.js';
 import Blocks from '../world/blocks.js';
 import { WATER_LEVEL } from '../world/constants.js';
@@ -37,6 +38,9 @@ const ITEM_BOB_SPEED = 2.4;      // bob frequency
 const ITEM_SPIN_SPEED = 1.6;     // radians/sec spin
 const ITEM_GRAVITY = -18;        // dropped items fall under light gravity
 const ITEM_MERGE_RANGE = 0.65;   // nearby same-type drops merge to reduce clutter
+
+// How many mobs may start a new path search in one frame.
+const MAX_PATHS_PER_FRAME = 3;
 
 const SPAWN_INTERVAL = 2.0;      // seconds between ambient spawn attempts
 const SPAWN_MIN_RADIUS = 14;     // blocks: don't spawn right on top of the player
@@ -68,6 +72,17 @@ export class EntityManager {
 
     this._spawnTimer = SPAWN_INTERVAL;
     this._itemIdCounter = 1;
+
+    // Shared navigation. One instance for every mob: the searches are
+    // stateless, and sharing keeps the stats in one place.
+    this.pathfinder = null;
+
+    // Per-frame cap on how many mobs may run a fresh A* search. Pathfinding is
+    // the most expensive thing mobs do, and without a cap a night-time crowd
+    // all repathing at once produces a visible frame spike on exactly the
+    // low-end machines we are trying not to exclude. Mobs that miss the budget
+    // keep following their existing path and try again next frame.
+    this.pathBudget = 0;
 
     // A lightly-entropic RNG for ambient spawning. We deliberately avoid
     // Math.random() (per project rules) and seed from the world seed + a clock
@@ -238,6 +253,14 @@ export class EntityManager {
      The per-frame update.
      ---------------------------------------------------------------------- */
   update(dt) {
+    // Lazily bind the pathfinder — world isn't guaranteed to exist at
+    // construction time.
+    if (!this.pathfinder && this.game && this.game.world) {
+      this.pathfinder = new Pathfinder(this.game.world);
+    }
+    // Refill the search budget each frame.
+    this.pathBudget = MAX_PATHS_PER_FRAME;
+
     if (!dt || dt <= 0) return;
     if (dt > 0.1) dt = 0.1;   // clamp huge spikes (tab refocus) to avoid tunneling
 

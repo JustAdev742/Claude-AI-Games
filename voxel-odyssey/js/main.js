@@ -37,6 +37,7 @@ import { Resources } from './render/resources.js';
 import { NetClient } from './net/client.js';
 import { RemotePlayers } from './net/remotePlayers.js';
 import { Sky } from './fx/sky.js';
+import { Weather } from './fx/weather.js';
 import { HUD } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
 
@@ -87,7 +88,7 @@ async function boot() {
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
     inventory: null, crafting: null, particles: null, audio: null,
-    sky: null, hud: null, menus: null, resources: null,
+    sky: null, weather: null, hud: null, menus: null, resources: null,
     net: null, remotePlayers: null,
     // runtime
     dt: 0, elapsed: 0, seed: 0, worldActive: false,
@@ -103,6 +104,7 @@ async function boot() {
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
   game.sky = new Sky(game);
+  game.weather = new Weather(game);
   game.entities = new EntityManager(game);
   game.player = new Player(game);
   game.hud = new HUD(game);
@@ -118,7 +120,7 @@ async function boot() {
   // straight to World.setAtlas, which needs World's materials to exist.
   const initOrder = [
     'worldgen', 'world', 'resources', 'inventory', 'crafting', 'particles',
-    'audio', 'sky', 'entities', 'player', 'hud', 'menus',
+    'audio', 'sky', 'weather', 'entities', 'player', 'hud', 'menus',
   ];
   for (const name of initOrder) {
     const sys = game[name];
@@ -368,6 +370,9 @@ async function boot() {
       if (game.worldActive) {
         // Advance day/night while playing, or gently during the menu backdrop.
         game.sky.update(playing ? dt * state.get('daylightSpeed') : (state.mode === 'menu' ? dt * 0.3 : 0));
+        // Weather runs on real time, not the day-cycle multiplier: a fast
+        // daylight setting should not make rain fall in fast-forward.
+        if (game.weather) game.weather.update(playing ? dt : 0);
         if (playing) {
           game.player.update(dt);
           game.entities.update(dt);

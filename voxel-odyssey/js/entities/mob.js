@@ -209,16 +209,61 @@ export class Mob {
   /* ----------------------------------------------------------------------
      Mesh construction — a handful of boxes per type.
      ---------------------------------------------------------------------- */
+  /* One material per MOB, not per box.
+     Colour comes from baked vertex colours instead, so a mob is a handful of
+     draw calls sharing a single material rather than ~10 separate ones — and
+     tinting the whole creature (damage flash, voxel light) is one uniform
+     write instead of walking every part. */
+  _material() {
+    if (!this._mat) {
+      this._mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    }
+    return this._mat;
+  }
+
+  _paint(geo, color) {
+    const c = new THREE.Color(color);
+    const n = geo.attributes.position.count;
+    const arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+    geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    return c;
+  }
+
   _addBox(w, h, d, x, y, z, color, role = 'body') {
     const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshLambertMaterial({ color });
-    const m = new THREE.Mesh(geo, mat);
+    const base = this._paint(geo, color);
+    const m = new THREE.Mesh(geo, this._material());
     m.position.set(x, y, z);
     this.mesh.add(m);
-    const rec = { mesh: m, baseColor: new THREE.Color(color), role };
+    const rec = { mesh: m, baseColor: base, role, pivot: null };
     this._parts.push(rec);
     if (role === 'leg') this._legParts.push(rec);
     return m;
+  }
+
+  /* A limb that swings from its TOP end.
+     Rotating a box about its own origin spins it around its middle, so legs
+     scissored at the knee instead of striding from the hip — the single
+     biggest reason the mobs read as lifeless. The mesh therefore hangs inside
+     a pivot Group placed at the joint, and animation rotates the pivot.
+
+     `topY` is the joint height in mob-local space; the limb hangs down from it. */
+  _addLimb(w, h, d, x, topY, z, color, role) {
+    const pivot = new THREE.Group();
+    pivot.position.set(x, topY, z);
+    this.mesh.add(pivot);
+
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const base = this._paint(geo, color);
+    const m = new THREE.Mesh(geo, this._material());
+    m.position.y = -h / 2;         // hang from the joint
+    pivot.add(m);
+
+    const rec = { mesh: m, baseColor: base, role, pivot };
+    this._parts.push(rec);
+    if (role === 'leg') this._legParts.push(rec);
+    return pivot;
   }
 
   _buildMesh() {
@@ -234,16 +279,17 @@ export class Mob {
       const torsoH = H * 0.35;
       const headS = H * 0.2;
       const legW = W * 0.32;
-      // legs
-      this._addBox(legW, legH, legW, -W * 0.18, legH * 0.5, 0, col, 'leg');
-      this._addBox(legW, legH, legW, W * 0.18, legH * 0.5, 0, col, 'leg');
+      // legs hang from the hip (y = legH), not from their own centres
+      this._addLimb(legW, legH, legW, -W * 0.18, legH, 0, col, 'leg');
+      this._addLimb(legW, legH, legW, W * 0.18, legH, 0, col, 'leg');
       // torso
       const torso = this._addBox(W * 0.7, torsoH, W * 0.42, 0, legH + torsoH * 0.5, 0, acc, 'body');
       torso.userData.role = 'body';
       // arms (swing opposite to legs)
       const armH = torsoH * 1.05;
-      this._addBox(legW * 0.7, armH, legW * 0.7, -(W * 0.45), legH + torsoH * 0.5, 0.05, col, 'arm');
-      this._addBox(legW * 0.7, armH, legW * 0.7, (W * 0.45), legH + torsoH * 0.5, 0.05, col, 'arm');
+      const shoulderY = legH + torsoH;
+      this._addLimb(legW * 0.7, armH, legW * 0.7, -(W * 0.45), shoulderY, 0.05, col, 'arm');
+      this._addLimb(legW * 0.7, armH, legW * 0.7, (W * 0.45), shoulderY, 0.05, col, 'arm');
       // head
       this._addBox(headS * 1.4, headS * 1.4, headS * 1.4, 0, legH + torsoH + headS * 0.7, 0, col, 'head');
     } else if (def.legs === 8) {
@@ -273,15 +319,16 @@ export class Mob {
       // legs (front/back pairs)
       if (quad) {
         const fz = bodyD * 0.32, lx = bodyW * 0.32;
-        this._addBox(legW, legH, legW, -lx, legH * 0.5, fz, def.accent ? acc : col, 'leg');
-        this._addBox(legW, legH, legW, lx, legH * 0.5, fz, def.accent ? acc : col, 'leg');
-        this._addBox(legW, legH, legW, -lx, legH * 0.5, -fz, def.accent ? acc : col, 'leg');
-        this._addBox(legW, legH, legW, lx, legH * 0.5, -fz, def.accent ? acc : col, 'leg');
+        const legCol = def.accent ? acc : col;
+        this._addLimb(legW, legH, legW, -lx, legH, fz, legCol, 'leg');
+        this._addLimb(legW, legH, legW, lx, legH, fz, legCol, 'leg');
+        this._addLimb(legW, legH, legW, -lx, legH, -fz, legCol, 'leg');
+        this._addLimb(legW, legH, legW, lx, legH, -fz, legCol, 'leg');
       } else {
         // chicken: two thin legs
         const lx = bodyW * 0.22;
-        this._addBox(legW * 0.7, legH, legW * 0.7, -lx, legH * 0.5, 0, acc, 'leg');
-        this._addBox(legW * 0.7, legH, legW * 0.7, lx, legH * 0.5, 0, acc, 'leg');
+        this._addLimb(legW * 0.7, legH, legW * 0.7, -lx, legH, 0, acc, 'leg');
+        this._addLimb(legW * 0.7, legH, legW * 0.7, lx, legH, 0, acc, 'leg');
       }
 
       // body
@@ -388,7 +435,7 @@ export class Mob {
     if (this.jumpCooldown > 0) this.jumpCooldown -= dt;
     if (this.hurtFlash > 0) {
       this.hurtFlash -= dt;
-      if (this.hurtFlash <= 0) this._setFlash(false);
+      // Flash decay is handled by _applyTint() each frame.
     }
     this.despawnTimer += dt;
 
@@ -575,19 +622,33 @@ export class Mob {
       return;
     }
 
-    // Chase: greedy step toward the player on the horizontal plane.
-    let dx = pp.x - this.position.x;
-    let dz = pp.z - this.position.z;
-    const len = Math.hypot(dx, dz) || 1;
-    dx /= len; dz /= len;
+    // Chase. Prefer a real path; fall back to steering straight at the target.
+    //
+    // Greedy steering alone fails on anything a creature should obviously walk
+    // around — a two-block wall, a tree, the lip of a ravine — because pressing
+    // into geometry produces no progress and no new information. A* gives a
+    // route; the sidestep heuristic below remains as the fallback for when no
+    // path exists (target unreachable) or the budget ran out.
+    const node = this._followPath(dt, pp, horiz);
+    let dx, dz;
+    if (node) {
+      dx = node.x - this.position.x;
+      dz = node.z - this.position.z;
+      const nl = Math.hypot(dx, dz) || 1;
+      dx /= nl; dz /= nl;
+    } else {
+      dx = pp.x - this.position.x;
+      dz = pp.z - this.position.z;
+      const len = Math.hypot(dx, dz) || 1;
+      dx /= len; dz /= len;
 
-    // Don't blindly walk into deep-water suicide unless very close.
-    if (horiz > ATTACK_RANGE && this._hazardAhead(dx, dz)) {
-      // Try a small sidestep to route around the hazard.
-      const sideX = -dz, sideZ = dx;
-      if (!this._hazardAhead(sideX, sideZ)) { dx = sideX; dz = sideZ; }
-      else if (!this._hazardAhead(-sideX, -sideZ)) { dx = -sideX; dz = -sideZ; }
-      else { dx = 0; dz = 0; }
+      // Don't blindly walk into deep-water suicide unless very close.
+      if (horiz > ATTACK_RANGE && this._hazardAhead(dx, dz)) {
+        const sideX = -dz, sideZ = dx;
+        if (!this._hazardAhead(sideX, sideZ)) { dx = sideX; dz = sideZ; }
+        else if (!this._hazardAhead(-sideX, -sideZ)) { dx = -sideX; dz = -sideZ; }
+        else { dx = 0; dz = 0; }
+      }
     }
 
     this.wishX = dx;
@@ -613,6 +674,59 @@ export class Mob {
         this.rangedTimer = 2.2;
       }
     }
+  }
+
+  /* Maintain a path toward `target` and return the waypoint to walk to.
+     Returns null when we have no usable path and the caller should steer.
+
+     Repathing is throttled and staggered: recomputing every frame would be
+     wasteful, and recomputing every mob on the SAME frame produces a periodic
+     spike. The mob's id offsets its schedule so the cost spreads out. */
+  _followPath(dt, target, horiz) {
+    const em = this.game && this.game.entities;
+    const pf = em && em.pathfinder;
+    if (!pf) return null;
+
+    // Close enough to just walk at them; pathing adds nothing and can look
+    // hesitant when the waypoint is behind the player.
+    if (horiz < 2.5) { this._path = null; return null; }
+
+    this._repathTimer = (this._repathTimer || 0) - dt;
+    const targetMoved = !this._pathGoal
+      || dist2D(this._pathGoal.x, this._pathGoal.z, target.x, target.z) > 2.5;
+
+    if (this._repathTimer <= 0 || targetMoved) {
+      // Stagger by id so a herd doesn't all repath on the same frame.
+      this._repathTimer = 0.6 + ((this.id % 7) * 0.05);
+      if (em.pathBudget > 0) {
+        em.pathBudget--;
+        const res = pf.find(this.position, target, {
+          height: Math.max(1, Math.ceil(this.height)),
+        });
+        this._path = res.path.length ? res.path : null;
+        this._pathGoal = { x: target.x, z: target.z };
+        this._pathIndex = 0;
+      }
+    }
+
+    const path = this._path;
+    if (!path || this._pathIndex >= path.length) return null;
+
+    // Advance past waypoints we have effectively reached.
+    let node = path[this._pathIndex];
+    while (node && dist2D(this.position.x, this.position.z, node.x, node.z) < 0.6) {
+      this._pathIndex++;
+      node = path[this._pathIndex];
+    }
+    if (!node) { this._path = null; return null; }
+
+    // If the next waypoint is a step up, hop — the path already verified the
+    // climb is legal, so this never bounces against an unclimbable wall.
+    if (node.y > this.position.y + 0.4 && this.onGround && this.jumpCooldown <= 0) {
+      this.velocity.y = JUMP_VELOCITY;
+      this.jumpCooldown = 0.4;
+    }
+    return node;
   }
 
   _meleePlayer(player) {
@@ -644,29 +758,90 @@ export class Mob {
      Animation — gentle leg swing while moving, plus hurt flash handling.
      ---------------------------------------------------------------------- */
   _animate(dt) {
-    const swingSpeed = 9;
-    const amp = 0.5 * this.moveAmount;     // radians, scaled by movement
-    const phase = this.age * swingSpeed;
+    // Stride rate scales with speed, so a sprinting mob's legs keep up with
+    // the ground instead of skating.
+    const speed = Math.hypot(this.velocity.x, this.velocity.z);
+    const swingSpeed = 5 + speed * 2.2;
+    const amp = 0.55 * this.moveAmount;
+    this._gaitPhase = (this._gaitPhase || 0) + dt * swingSpeed;
+    const phase = this._gaitPhase;
+
     const legs = this._legParts;
     for (let i = 0; i < legs.length; i++) {
-      // Alternate legs swing in opposite phase.
-      const sign = (i % 2 === 0) ? 1 : -1;
-      legs[i].mesh.rotation.x = Math.sin(phase) * amp * sign;
+      // Quadrupeds move diagonal pairs together (front-left with back-right),
+      // which is what makes a four-legged walk read as a walk rather than a
+      // hobby-horse. Bipeds simply alternate.
+      const sign = legs.length >= 4
+        ? (((i % 2) === ((i / 2) | 0) % 2) ? 1 : -1)
+        : ((i % 2 === 0) ? 1 : -1);
+      const rec = legs[i];
+      const target = rec.pivot || rec.mesh;
+      target.rotation.x = Math.sin(phase) * amp * sign;
     }
-    // Arms (humanoids) swing opposite to legs.
+
+    // Arms counter-swing to the legs.
     for (const rec of this._parts) {
-      if (rec.role === 'arm') {
-        rec.mesh.rotation.x = -Math.sin(phase) * amp * 0.9;
-      }
+      if (rec.role !== 'arm') continue;
+      const target = rec.pivot || rec.mesh;
+      // A zombie holds its arms out ahead; a skeleton lets them hang.
+      const reach = this.def.humanoid && this.type === 'zombie' ? -1.35 : 0;
+      target.rotation.x = reach - Math.sin(phase) * amp * 0.9;
     }
-    // A small idle bob for the head so mobs feel alive even when still.
+
+    // Idle life: breathing, plus an occasional head turn so a standing mob
+    // never looks frozen.
     const head = this._parts.find((p) => p.role === 'head');
     if (head) {
+      const idle = 1 - this.moveAmount;
       head.mesh.rotation.z = Math.sin(this.age * 1.7 + this.id) * 0.04;
+      head.mesh.rotation.y = Math.sin(this.age * 0.6 + this.id * 2.1) * 0.35 * idle;
+      head.mesh.position.y = (head.mesh.userData.baseY !== undefined
+        ? head.mesh.userData.baseY
+        : (head.mesh.userData.baseY = head.mesh.position.y))
+        + Math.sin(this.age * 2.2 + this.id) * 0.012 * idle;
+    }
+
+    this._applyTint();
+  }
+
+  /* Tint the shared material by the voxel light at the mob's head, so a
+     creature standing in a cave is dark. Without this mobs are lit only by
+     the sky's directional light, which voxels cannot occlude — the same
+     "sun through walls" class of bug the terrain shader was written to fix.
+     The damage flash multiplies into the same colour. */
+  _applyTint() {
+    const mat = this._mat;
+    if (!mat) return;
+    const world = this.game && this.game.world;
+
+    let level = 1;
+    if (world && typeof world.getLightByte === 'function') {
+      const packed = world.getLightByte(
+        Math.floor(this.position.x),
+        Math.floor(this.position.y + this.height * 0.8),
+        Math.floor(this.position.z),
+      );
+      const sky = ((packed >> 4) & 0x0f) / 15;
+      const blk = (packed & 0x0f) / 15;
+      const daylight = (world.uniforms && world.uniforms.uDaylight)
+        ? world.uniforms.uDaylight.value : 1;
+      level = Math.max(sky * daylight, blk);
+      // Same floor the terrain shader uses, so mobs and ground agree.
+      level = Math.max(0.08, Math.pow(level, 1.45));
+    }
+
+    if (this.hurtFlash > 0) {
+      // Flash toward red without losing the light level entirely.
+      const t = Math.min(1, this.hurtFlash / HURT_FLASH_TIME);
+      mat.color.setRGB(level + (1 - level) * t, level * (1 - t * 0.75), level * (1 - t * 0.75));
+    } else {
+      mat.color.setRGB(level, level, level);
     }
   }
 
-  _setFlash(on) {
+  // Flash is applied through the shared material tint in _applyTint(); this
+  // remains only for any caller that toggles it explicitly.
+  _setFlashLegacy(on) {
     for (const rec of this._parts) {
       const mat = rec.mesh.material;
       if (!mat || !mat.color) continue;
@@ -686,7 +861,7 @@ export class Mob {
     this.health -= amount;
 
     // Red flash.
-    this._setFlash(true);
+    // _applyTint() picks up hurtFlash on the next frame.
     this.hurtFlash = HURT_FLASH_TIME;
 
     // Knockback away from the source (horizontal) + a little pop up.
