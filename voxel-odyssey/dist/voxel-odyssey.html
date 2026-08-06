@@ -33609,6 +33609,7 @@ var WorldGen = class {
     this.seed = (seed | 0) >>> 0;
     this.climate = new Climate(this.seed);
     this.caveNoise = new Noise(hashCombine(this.seed, SALT2.cave));
+    this.ravineNoise = new Noise(hashCombine(this.seed, SALT2.ridge));
     this._colCache.clear();
     this._colCacheSeed = this.seed;
     return this;
@@ -33633,6 +33634,28 @@ var WorldGen = class {
   columnInfo(wx, wz) {
     return this._column(wx | 0, wz | 0);
   }
+  /* Ravines: long, narrow canyon cuts through land.
+  
+       Same trick as rivers — the zero-crossing of a smooth 2D field is a
+       continuous meandering line, so |noise| < width gives a connected canyon
+       rather than scattered pits. Depth peaks at the centreline and falls to
+       zero at the edges, which is what shapes sloping walls instead of a
+       square trench: the floor rises smoothly to meet the surface.
+  
+       Land only. Carving an underwater column would leave its water column
+       floating over the void, and rendering has no flood-fill to fix that. */
+  _ravineFloor(wx, wz, surfaceY) {
+    if (surfaceY <= SEA + 1) return null;
+    const n = this.ravineNoise.fbm2(wx, wz, 3, 4e-3, 2, 0.5);
+    const W = 0.02;
+    const a = Math.abs(n);
+    if (a >= W) return null;
+    const t = 1 - a / W;
+    const shaped2 = t * t * (3 - 2 * t);
+    const depth = (10 + 16 * shaped2) * shaped2;
+    if (depth < 2) return null;
+    return Math.max(BEDROCK_TOP + 2, Math.round(surfaceY - depth));
+  }
   /* --- per-column height computation ------------------------------------ */
   // Computes (and caches) the full column descriptor for a world column.
   _column(wx, wz) {
@@ -33654,7 +33677,10 @@ var WorldGen = class {
       moisture,
       continent: c.continent,
       erosion: c.erosion,
-      river: c.river
+      river: c.river,
+      // Ravine carve floor for this column, or null. Computed here (2D,
+      // cached) so the per-voxel carver is just a range test.
+      carveFloor: this._ravineFloor(wx, wz, c.height)
     };
     if (this._colCache.size > 8192) this._colCache.clear();
     this._colCache.set(key, info);
@@ -33746,6 +33772,7 @@ var WorldGen = class {
       const r = hashCombine(this.seed, wx, wz, y * 131 + SALT2.height) / 4294967296;
       return r < 1 - y / (BEDROCK_TOP + 1) ? ID.BEDROCK : ID.STONE;
     }
+    if (info.carveFloor !== null && y > info.carveFloor) return ID.AIR;
     const subDepth = surf.surfaceId === ID.SAND ? 4 : 3;
     let id;
     if (y === surfaceY) id = surf.surfaceId;
@@ -33791,12 +33818,20 @@ var WorldGen = class {
   // Caves only form a few blocks below the surface and above the bedrock.
   _isCave(wx, y, wz, surfaceY) {
     if (y <= BEDROCK_TOP + 1) return false;
-    if (y >= surfaceY - 3) return false;
+    const underwater = surfaceY <= SEA + 1;
+    if (underwater && y >= surfaceY - 3) return false;
+    if (y > surfaceY) return false;
+    const depthBias = clamp2((surfaceY - y) / 48, 0, 0.12);
+    const nearSurface = y >= surfaceY - 3;
+    const tThresh = (0.16 + depthBias) * (nearSurface ? 0.45 : 1);
     const n1 = this.caveNoise.perlin3(wx * 0.045, y * 0.07, wz * 0.045);
     const n2 = this.caveNoise.perlin3(wx * 0.03 + 100.5, y * 0.05 + 50.5, wz * 0.03 + 100.5);
-    const depthBias = clamp2((surfaceY - y) / 48, 0, 0.12);
-    const threshold = 0.16 + depthBias;
-    return Math.abs(n1) < threshold && Math.abs(n2) < threshold;
+    if (Math.abs(n1) < tThresh && Math.abs(n2) < tThresh) return true;
+    if (y < surfaceY - 12) {
+      const n3 = this.caveNoise.perlin3(wx * 0.018, y * 0.035, wz * 0.018 + 77.7);
+      if (n3 > 0.46 - depthBias * 0.5) return true;
+    }
+    return false;
   }
   /* --- ores ------------------------------------------------------------- */
   // Deterministic ore placement. Depth bands gate which ores can appear; a
@@ -33819,6 +33854,7 @@ var WorldGen = class {
   _decorate(chunk, lx, lz, wx, wz, info, rng, inChunk = true) {
     const biome = info.biome;
     const surfaceY = info.height;
+    if (info.carveFloor !== null) return;
     if (surfaceY < SEA) return;
     if (surfaceY >= MAX_Y - 8) return;
     let ground, above;

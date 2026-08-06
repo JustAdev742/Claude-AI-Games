@@ -94,6 +94,7 @@ export class WorldGen {
     this.seed = (seed | 0) >>> 0;
     this.climate = new Climate(this.seed);
     this.caveNoise = new Noise(hashCombine(this.seed, SALT.cave));
+    this.ravineNoise = new Noise(hashCombine(this.seed, SALT.ridge));
     this._colCache.clear();
     this._colCacheSeed = this.seed;
     return this;
@@ -125,6 +126,29 @@ export class WorldGen {
     return this._column(wx | 0, wz | 0);
   }
 
+  /* Ravines: long, narrow canyon cuts through land.
+
+     Same trick as rivers — the zero-crossing of a smooth 2D field is a
+     continuous meandering line, so |noise| < width gives a connected canyon
+     rather than scattered pits. Depth peaks at the centreline and falls to
+     zero at the edges, which is what shapes sloping walls instead of a
+     square trench: the floor rises smoothly to meet the surface.
+
+     Land only. Carving an underwater column would leave its water column
+     floating over the void, and rendering has no flood-fill to fix that. */
+  _ravineFloor(wx, wz, surfaceY) {
+    if (surfaceY <= SEA + 1) return null;
+    const n = this.ravineNoise.fbm2(wx, wz, 3, 0.004, 2.0, 0.5);
+    const W = 0.02;                      // half-width of the cut, in noise units
+    const a = Math.abs(n);
+    if (a >= W) return null;
+    const t = 1 - a / W;                 // 0 at the rim, 1 at the centreline
+    const shaped = t * t * (3 - 2 * t);  // smooth walls
+    const depth = (10 + 16 * shaped) * shaped;
+    if (depth < 2) return null;          // rim fringe: not worth a hole
+    return Math.max(BEDROCK_TOP + 2, Math.round(surfaceY - depth));
+  }
+
   /* --- per-column height computation ------------------------------------ */
 
   // Computes (and caches) the full column descriptor for a world column.
@@ -147,6 +171,9 @@ export class WorldGen {
     const info = {
       height: c.height, biome, temperature, moisture,
       continent: c.continent, erosion: c.erosion, river: c.river,
+      // Ravine carve floor for this column, or null. Computed here (2D,
+      // cached) so the per-voxel carver is just a range test.
+      carveFloor: this._ravineFloor(wx, wz, c.height),
     };
     // Keep the cache from growing without bound across a long session.
     if (this._colCache.size > 8192) this._colCache.clear();
@@ -274,6 +301,10 @@ export class WorldGen {
       return r < (1 - y / (BEDROCK_TOP + 1)) ? ID.BEDROCK : ID.STONE;
     }
 
+    // Ravine cut: everything between the carve floor and the surface is air,
+    // including the surface block itself — that IS the canyon opening.
+    if (info.carveFloor !== null && y > info.carveFloor) return ID.AIR;
+
     const subDepth = (surf.surfaceId === ID.SAND) ? 4 : 3;
     let id;
     if (y === surfaceY) id = surf.surfaceId;
@@ -323,17 +354,35 @@ export class WorldGen {
   // Caves only form a few blocks below the surface and above the bedrock.
   _isCave(wx, y, wz, surfaceY) {
     if (y <= BEDROCK_TOP + 1) return false;       // protect bedrock floor
-    if (y >= surfaceY - 3) return false;          // keep a solid surface crust
 
-    // Two overlapping low-frequency fields; carve where both are near zero,
-    // producing winding tunnels rather than spherical blobs.
+    // Underwater columns keep a full 4-block crust: a breach would leave the
+    // ocean above hanging over air, and nothing re-floods it.
+    const underwater = surfaceY <= SEA + 1;
+    if (underwater && y >= surfaceY - 3) return false;
+    if (y > surfaceY) return false;
+
+    const depthBias = clamp((surfaceY - y) / 48, 0, 0.12);
+
+    // Tunnels: two overlapping fields, carve where both are near zero —
+    // winding worms rather than blobs. Near the surface (top 4 blocks, land
+    // only) the threshold tightens hard, so a tunnel only breaks through
+    // where its signal is strongest: those breaches are the cave ENTRANCES
+    // on hillsides, which the old blanket crust rule made impossible.
+    const nearSurface = y >= surfaceY - 3;
+    const tThresh = (0.16 + depthBias) * (nearSurface ? 0.45 : 1);
     const n1 = this.caveNoise.perlin3(wx * 0.045, y * 0.07, wz * 0.045);
     const n2 = this.caveNoise.perlin3(wx * 0.03 + 100.5, y * 0.05 + 50.5, wz * 0.03 + 100.5);
+    if (Math.abs(n1) < tThresh && Math.abs(n2) < tThresh) return true;
 
-    // Widen caves with depth a touch (more open space deep down).
-    const depthBias = clamp((surfaceY - y) / 48, 0, 0.12);
-    const threshold = 0.16 + depthBias;
-    return Math.abs(n1) < threshold && Math.abs(n2) < threshold;
+    // Caverns: a single low-frequency field above a high threshold opens
+    // large rooms, but only well below the surface — they are what the
+    // tunnels occasionally spill into, not something you fall through the
+    // lawn into.
+    if (y < surfaceY - 12) {
+      const n3 = this.caveNoise.perlin3(wx * 0.018, y * 0.035, wz * 0.018 + 77.7);
+      if (n3 > 0.46 - depthBias * 0.5) return true;
+    }
+    return false;
   }
 
   /* --- ores ------------------------------------------------------------- */
@@ -377,7 +426,11 @@ export class WorldGen {
     const biome = info.biome;
     const surfaceY = info.height;
 
-    // No surface decoration underwater (except nothing) or on ice/oceans.
+    // No surface decoration underwater, and none on a ravine lip — the
+    // surface block there was carved away, so there is nothing to stand a
+    // tree on. In-chunk columns would catch this via the AIR ground read;
+    // margin columns must use the descriptor, since the chunk has no data.
+    if (info.carveFloor !== null) return;
     if (surfaceY < SEA) return;
     if (surfaceY >= MAX_Y - 8) return;            // leave headroom for trees
 

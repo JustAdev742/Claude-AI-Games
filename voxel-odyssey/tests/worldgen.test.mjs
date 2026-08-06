@@ -167,5 +167,83 @@ const DECOR = new Set([ID.LOG, ID.BIRCH_LOG, ID.PINE_LOG, ID.LEAVES, ID.BIRCH_LE
   ok('rivers: inland water channels exist', riverColumns > 20, `${riverColumns}`);
 }
 
+/* ---- caves and ravines ---- */
+{
+  const wg = mkGen(8080);
+
+  // Ravines: present on land, and forming LINES rather than isolated pits.
+  let ravCols = 0, landCols = 0;
+  let seedCol = null;
+  for (let x = -1200; x <= 1200; x += 5) {
+    for (let z = -1200; z <= 1200; z += 5) {
+      const info = wg.columnInfo(x, z);
+      if (info.height <= WATER_LEVEL) continue;
+      landCols++;
+      if (info.carveFloor !== null) { ravCols++; if (!seedCol) seedCol = { x, z }; }
+    }
+  }
+  ok('ravines: exist on land', ravCols > 0, `${ravCols}`);
+  ok('ravines: are rare features', ravCols / landCols < 0.08, `${(ravCols / landCols * 100).toFixed(1)}%`);
+
+  if (seedCol) {
+    // Flood along the ravine from a hit column: a canyon yields a connected
+    // run of carved columns; scattered pits would not.
+    const seen = new Set();
+    const stack = [seedCol];
+    while (stack.length && seen.size < 400) {
+      const { x, z } = stack.pop();
+      const k = `${x},${z}`;
+      if (seen.has(k)) continue;
+      const info = wg.columnInfo(x, z);
+      if (info.carveFloor === null) continue;
+      seen.add(k);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) stack.push({ x: x + dx, z: z + dz });
+    }
+    ok('ravines: form connected canyons', seen.size >= 12, `${seen.size} connected columns`);
+
+    // Walls slope: the floor near the rim is shallower than at the centre.
+    const floors = [...seen].map((k) => wg.columnInfo(...k.split(',').map(Number)).carveFloor);
+    const span = Math.max(...floors) - Math.min(...floors);
+    ok('ravines: depth varies toward the rim', span >= 3, `floor span ${span}`);
+  }
+
+  // Caves: pockets below the surface, including big rooms at depth.
+  const wg2 = mkGen(6006);
+  let caveVox = 0, deepRoomVox = 0, entrances = 0;
+  for (let x = -300; x <= 300; x += 4) {
+    for (let z = -300; z <= 300; z += 4) {
+      const info = wg2.columnInfo(x, z);
+      if (info.height <= WATER_LEVEL || info.carveFloor !== null) continue;
+      // Surface breach = entrance (ravines excluded above).
+      if (wg2.blockAt(x, info.height, z) === ID.AIR) entrances++;
+      for (let y = 6; y < info.height - 3; y += 2) {
+        if (wg2.blockAt(x, y, z) === ID.AIR) {
+          caveVox++;
+          if (y < info.height - 12) deepRoomVox++;
+        }
+      }
+    }
+  }
+  ok('caves: underground air exists', caveVox > 50, `${caveVox}`);
+  ok('caves: deep caverns exist', deepRoomVox > 20, `${deepRoomVox}`);
+  ok('caves: hillside entrances exist', entrances > 0, `${entrances}`);
+
+  // The classic carver bug: water directly above carved air. Generate real
+  // chunks and scan every column — zero tolerance.
+  let floatingWater = 0;
+  for (let cx = -2; cx <= 2; cx++) {
+    for (let cz = -2; cz <= 2; cz++) {
+      const c = genChunk(wg2, cx, cz);
+      for (let lx = 0; lx < CHUNK_SX; lx++) for (let lz = 0; lz < CHUNK_SZ; lz++) {
+        for (let y = 1; y < CHUNK_SY - 1; y++) {
+          if (c.blocks[localIndex(lx, y, lz)] === ID.WATER
+            && c.blocks[localIndex(lx, y - 1, lz)] === ID.AIR) floatingWater++;
+        }
+      }
+    }
+  }
+  ok('caves: no water floating over carved air', floatingWater === 0, `${floatingWater}`);
+}
+
 console.log(`\n==== worldgen: ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);
