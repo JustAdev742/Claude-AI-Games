@@ -36035,6 +36035,9 @@ var Player = class {
     this._bobPhase = 0;
     this._bobAmount = 0;
     this._swing = 0;
+    this._swingPhase = 0;
+    this._chopAmp = 0;
+    this._mineSwinging = false;
     this._eyeY = EYE_HEIGHT;
     this._viewmodel = null;
     this._viewmodelKey = void 0;
@@ -36045,6 +36048,7 @@ var Player = class {
   /* ---- lifecycle ------------------------------------------------------- */
   init() {
     this._buildHighlight();
+    this._buildCracks();
     const ev = this.game.events;
     if (ev) {
       ev.on("hotbar:select", () => {
@@ -36560,7 +36564,7 @@ var Player = class {
     const power = this._toolPowerFor(heldKey, def2);
     const breakTime = Math.max(0.05, hardness * 1.5 / Math.max(1, power));
     this.mineProgress += dt / breakTime;
-    this._swing = Math.min(1, this._swing + dt * 6);
+    this._mineSwinging = true;
     if (this.mineProgress >= 1) {
       this.mineProgress = 0;
       this._miningKey = null;
@@ -36752,6 +36756,7 @@ var Player = class {
     cam.rotation.set(this.pitch, this.yaw, 0, "YXZ");
     this._updateViewmodel(dt);
     this._updateHighlight();
+    this._updateCracks();
     this._moveEventTimer -= dt;
     if (this._moveEventTimer <= 0) {
       this._moveEventTimer = MOVE_EVENT_INTERVAL;
@@ -36801,6 +36806,88 @@ var Player = class {
     const p = this.mineProgress || 0;
     h.material.color.setScalar(0.04 + p * 0.9);
     h.material.opacity = 0.85 + 0.15 * p;
+  }
+  /* ---- block-break crack decal ----------------------------------------- */
+  /* Five procedurally drawn crack stages, shown on the block being mined.
+       Progress was previously invisible on the block itself — only the outline
+       brightened — so mining hard stone gave no sense of getting anywhere.
+  
+       The decal is a slightly-inflated box wrapped around the target block with
+       a transparent crack texture on every face. Textures are drawn once, on
+       first use: jagged dark polylines radiating from the centre, more and
+       longer per stage. Swapping stages is a material.map assignment — no
+       uploads after the first build. */
+  _buildCracks() {
+    if (this._cracks || typeof document === "undefined") return;
+    const scene = this.game.scene;
+    if (!scene) return;
+    const stages = [];
+    for (let stage = 0; stage < 5; stage++) {
+      const S2 = 16;
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = S2;
+      const ctx = canvas.getContext("2d");
+      let seed = 2654435769 ^ stage * 2654435761;
+      const rnd = () => {
+        seed ^= seed << 13;
+        seed >>>= 0;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed >>>= 0;
+        return (seed >>> 0) / 4294967296;
+      };
+      ctx.clearRect(0, 0, S2, S2);
+      ctx.fillStyle = "rgba(12,12,12,0.9)";
+      const branches = 3 + stage * 2;
+      for (let b = 0; b < branches; b++) {
+        let x = S2 / 2 + (rnd() * 4 - 2);
+        let y = S2 / 2 + (rnd() * 4 - 2);
+        const len = 3 + stage * 2 + rnd() * 3;
+        let dx = rnd() < 0.5 ? 1 : -1;
+        let dy = rnd() < 0.5 ? 1 : -1;
+        for (let i = 0; i < len; i++) {
+          ctx.fillRect(x | 0, y | 0, 1, 1);
+          if (rnd() < 0.4) x += dx;
+          else y += dy;
+          if (rnd() < 0.15) dx = -dx;
+          if (rnd() < 0.15) dy = -dy;
+          if (x < 0 || y < 0 || x >= S2 || y >= S2) break;
+        }
+      }
+      const tex = new CanvasTexture(canvas);
+      tex.magFilter = NearestFilter;
+      tex.minFilter = NearestFilter;
+      stages.push(tex);
+    }
+    this._crackStages = stages;
+    const mat = new MeshBasicMaterial({
+      map: stages[0],
+      transparent: true,
+      depthWrite: false,
+      // Pull the decal toward the camera in depth so it never z-fights the
+      // block face it sits on, without needing a visible geometric gap.
+      polygonOffset: true,
+      polygonOffsetFactor: -2
+    });
+    this._cracks = new Mesh(new BoxGeometry(1.002, 1.002, 1.002), mat);
+    this._cracks.visible = false;
+    this._cracks.renderOrder = 3;
+    this._cracks.frustumCulled = false;
+    scene.add(this._cracks);
+  }
+  _updateCracks() {
+    if (!this._cracks) return;
+    const t = this._lastTarget;
+    const p = this.mineProgress || 0;
+    const show = !!t && p > 0.03 && this.game.mode === "play" && !this.dead;
+    this._cracks.visible = show;
+    if (!show) return;
+    this._cracks.position.set(t.block.x + 0.5, t.block.y + 0.5, t.block.z + 0.5);
+    const stage = Math.min(4, Math.floor(p * 5));
+    if (this._cracks.material.map !== this._crackStages[stage]) {
+      this._cracks.material.map = this._crackStages[stage];
+      this._cracks.material.needsUpdate = true;
+    }
   }
   /* ---- viewmodel (held item in front of the camera) ------------------- */
   _refreshViewmodel() {
@@ -36864,28 +36951,33 @@ var Player = class {
       }
       setBlockGeometryLight(this._vmBlockGeom, sky, blk);
     }
-    const swing = this._swing;
     const bob = this._bobAmount;
     const t = this.game.elapsed || 0;
+    const mining = this._mineSwinging;
+    this._mineSwinging = false;
+    this._chopAmp += ((mining ? 1 : 0) - this._chopAmp) * Math.min(1, dt * 10);
+    if (this._chopAmp > 0.01) {
+      this._swingPhase += dt * 9;
+    } else {
+      this._swingPhase = 0;
+    }
+    const chop = this._chopAmp * (0.5 - 0.5 * Math.cos(this._swingPhase * Math.PI * 2));
+    const a = Math.sin(Math.min(1, Math.max(this._swing, chop)) * Math.PI);
     const baseX = 0.55, baseY = -0.45, baseZ = -0.9;
     const idleBob = Math.sin(t * 2) * 0.01 * (1 - bob) + Math.sin(t * 9) * 0.015 * bob;
     this._viewmodel.position.set(
-      baseX,
-      baseY + idleBob - swing * 0.12,
-      baseZ + swing * 0.1
-    );
-    this._viewmodel.rotation.set(
-      -swing * 0.9,
-      0.3 + swing * 0.2,
-      0
+      baseX - a * 0.16,
+      baseY + idleBob - a * 0.2,
+      baseZ - a * 0.14
     );
     const cam = this.game.camera;
     if (cam) {
       this._viewmodel.position.applyQuaternion(cam.quaternion);
       this._viewmodel.position.add(cam.position);
       this._viewmodel.quaternion.copy(cam.quaternion);
-      this._viewmodel.rotateX(-swing * 0.9);
-      this._viewmodel.rotateY(0.2 + swing * 0.2);
+      this._viewmodel.rotateX(-a * 1.25);
+      this._viewmodel.rotateY(0.3 + a * 0.32);
+      this._viewmodel.rotateZ(-a * 0.28);
     }
   }
   _disposeObject(obj) {

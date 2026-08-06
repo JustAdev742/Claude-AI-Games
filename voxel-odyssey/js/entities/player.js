@@ -115,7 +115,10 @@ export class Player {
     // ---- camera feel ----
     this._bobPhase = 0;
     this._bobAmount = 0;
-    this._swing = 0;              // viewmodel swing animation 0..1
+    this._swing = 0;              // one-shot swing impulse 1 -> 0
+    this._swingPhase = 0;         // continuous chop cycle while mining
+    this._chopAmp = 0;            // eased 0..1 so the chop starts/stops soft
+    this._mineSwinging = false;   // set each frame the mining loop is active
     this._eyeY = EYE_HEIGHT;
 
     // ---- viewmodel ----
@@ -133,6 +136,7 @@ export class Player {
 
   init() {
     this._buildHighlight();
+    this._buildCracks();
     // Keep the held-item viewmodel in sync with the selected hotbar slot.
     const ev = this.game.events;
     if (ev) {
@@ -761,7 +765,10 @@ export class Player {
     // Time to break ~ hardness * 1.5 / power seconds. Guard against 0 hardness.
     const breakTime = Math.max(0.05, (hardness * 1.5) / Math.max(1, power));
     this.mineProgress += dt / breakTime;
-    this._swing = Math.min(1, this._swing + dt * 6);
+    // Mining runs a continuous chop cycle in the viewmodel (see
+    // _updateViewmodel). The old code saturated _swing at 1 here, which just
+    // froze the arm at full tilt for as long as the button was held.
+    this._mineSwinging = true;
 
     if (this.mineProgress >= 1) {
       this.mineProgress = 0;
@@ -988,6 +995,7 @@ export class Player {
     // Update the held-item viewmodel transform / swing.
     this._updateViewmodel(dt);
     this._updateHighlight();
+    this._updateCracks();
 
     // Throttled move event for systems that care.
     this._moveEventTimer -= dt;
@@ -1044,6 +1052,92 @@ export class Player {
     const p = this.mineProgress || 0;
     h.material.color.setScalar(0.04 + p * 0.9);
     h.material.opacity = 0.85 + 0.15 * p;
+  }
+
+  /* ---- block-break crack decal ----------------------------------------- */
+
+  /* Five procedurally drawn crack stages, shown on the block being mined.
+     Progress was previously invisible on the block itself — only the outline
+     brightened — so mining hard stone gave no sense of getting anywhere.
+
+     The decal is a slightly-inflated box wrapped around the target block with
+     a transparent crack texture on every face. Textures are drawn once, on
+     first use: jagged dark polylines radiating from the centre, more and
+     longer per stage. Swapping stages is a material.map assignment — no
+     uploads after the first build. */
+  _buildCracks() {
+    if (this._cracks || typeof document === 'undefined') return;
+    const scene = this.game.scene;
+    if (!scene) return;
+
+    const stages = [];
+    for (let stage = 0; stage < 5; stage++) {
+      const S = 16;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = S;
+      const ctx = canvas.getContext('2d');
+      // Deterministic per stage so every block cracks the same way.
+      let seed = 0x9e3779b9 ^ (stage * 2654435761);
+      const rnd = () => {
+        seed ^= seed << 13; seed >>>= 0;
+        seed ^= seed >> 17; seed ^= seed << 5; seed >>>= 0;
+        return (seed >>> 0) / 4294967296;
+      };
+      ctx.clearRect(0, 0, S, S);
+      ctx.fillStyle = 'rgba(12,12,12,0.9)';
+      const branches = 3 + stage * 2;
+      for (let b = 0; b < branches; b++) {
+        // Random walk outward from near the centre.
+        let x = S / 2 + (rnd() * 4 - 2);
+        let y = S / 2 + (rnd() * 4 - 2);
+        const len = 3 + stage * 2 + rnd() * 3;
+        let dx = rnd() < 0.5 ? 1 : -1;
+        let dy = rnd() < 0.5 ? 1 : -1;
+        for (let i = 0; i < len; i++) {
+          ctx.fillRect(x | 0, y | 0, 1, 1);
+          // Jagged: mostly continue, sometimes kink.
+          if (rnd() < 0.4) x += dx; else y += dy;
+          if (rnd() < 0.15) dx = -dx;
+          if (rnd() < 0.15) dy = -dy;
+          if (x < 0 || y < 0 || x >= S || y >= S) break;
+        }
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      stages.push(tex);
+    }
+    this._crackStages = stages;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: stages[0],
+      transparent: true,
+      depthWrite: false,
+      // Pull the decal toward the camera in depth so it never z-fights the
+      // block face it sits on, without needing a visible geometric gap.
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    this._cracks = new THREE.Mesh(new THREE.BoxGeometry(1.002, 1.002, 1.002), mat);
+    this._cracks.visible = false;
+    this._cracks.renderOrder = 3;
+    this._cracks.frustumCulled = false;
+    scene.add(this._cracks);
+  }
+
+  _updateCracks() {
+    if (!this._cracks) return;
+    const t = this._lastTarget;
+    const p = this.mineProgress || 0;
+    const show = !!t && p > 0.03 && this.game.mode === 'play' && !this.dead;
+    this._cracks.visible = show;
+    if (!show) return;
+    this._cracks.position.set(t.block.x + 0.5, t.block.y + 0.5, t.block.z + 0.5);
+    const stage = Math.min(4, Math.floor(p * 5));
+    if (this._cracks.material.map !== this._crackStages[stage]) {
+      this._cracks.material.map = this._crackStages[stage];
+      this._cracks.material.needsUpdate = true;
+    }
   }
 
   /* ---- viewmodel (held item in front of the camera) ------------------- */
@@ -1130,24 +1224,37 @@ export class Player {
       setBlockGeometryLight(this._vmBlockGeom, sky, blk);
     }
 
-    // Rest pose: lower-right of the screen, in front of the camera.
-    const swing = this._swing;
     const bob = this._bobAmount;
     const t = this.game.elapsed || 0;
+
+    // Two animation sources compose into one arc value:
+    //   impulse — a single 1->0 decay fired by clicks and placements;
+    //   chop    — a continuous cycle that runs while mining is held.
+    // Both are pushed through sin(x*pi), so the arm travels OUT AND BACK along
+    // a curve instead of snapping home when the linear decay hits zero.
+    const mining = this._mineSwinging;
+    this._mineSwinging = false;                       // re-armed by the mining code each frame
+    this._chopAmp += ((mining ? 1 : 0) - this._chopAmp) * Math.min(1, dt * 10);
+    if (this._chopAmp > 0.01) {
+      this._swingPhase += dt * 9;                     // chop rate while held
+    } else {
+      this._swingPhase = 0;
+    }
+    const chop = this._chopAmp * (0.5 - 0.5 * Math.cos(this._swingPhase * Math.PI * 2));
+    const a = Math.sin(Math.min(1, Math.max(this._swing, chop)) * Math.PI);
 
     // Base position in camera-local-ish space (viewmodel scene shares the camera).
     const baseX = 0.55, baseY = -0.45, baseZ = -0.9;
     const idleBob = Math.sin(t * 2) * 0.01 * (1 - bob) + Math.sin(t * 9) * 0.015 * bob;
 
+    // The swing is an arc toward the crosshair: in, down, and across, with a
+    // wrist roll — not a straight dip. Only the position is set here; the
+    // rotation must be applied AFTER the camera-quaternion copy below, which
+    // would overwrite anything written into .rotation at this point.
     this._viewmodel.position.set(
-      baseX,
-      baseY + idleBob - swing * 0.12,
-      baseZ + swing * 0.1
-    );
-    this._viewmodel.rotation.set(
-      -swing * 0.9,
-      0.3 + swing * 0.2,
-      0
+      baseX - a * 0.16,
+      baseY + idleBob - a * 0.2,
+      baseZ - a * 0.14
     );
 
     // The viewmodel scene is rendered with the same camera, so transform the
@@ -1157,8 +1264,9 @@ export class Player {
       this._viewmodel.position.applyQuaternion(cam.quaternion);
       this._viewmodel.position.add(cam.position);
       this._viewmodel.quaternion.copy(cam.quaternion);
-      this._viewmodel.rotateX(-swing * 0.9);
-      this._viewmodel.rotateY(0.2 + swing * 0.2);
+      this._viewmodel.rotateX(-a * 1.25);
+      this._viewmodel.rotateY(0.3 + a * 0.32);
+      this._viewmodel.rotateZ(-a * 0.28);
     }
   }
 
