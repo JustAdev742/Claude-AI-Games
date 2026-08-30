@@ -601,6 +601,7 @@ export class Menus {
       ['jump', 'Jump'], ['sneak', 'Sneak'], ['sprint', 'Sprint'],
       ['inventory', 'Inventory'], ['drop', 'Drop item'],
       ['fly', 'Toggle flight'], ['debug', 'Debug overlay'],
+      ['releaseCursor', 'Release mouse'],
     ];
 
     const list = this._make('div', { class: 'keybind-list' });

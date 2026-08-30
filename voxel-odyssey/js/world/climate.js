@@ -292,11 +292,36 @@ export class Climate {
 
 export const BIOME_TABLE = [
   // --- oceanic -------------------------------------------------------
-  { name: 'deep_ocean', continent: [-1.0, -0.55], temp: [-1, 1], humid: [-1, 1], erosion: [-1, 1] },
-  { name: 'ocean', continent: [-0.55, -0.22], temp: [-1, 0.6], humid: [-1, 1], erosion: [-1, 1] },
-  { name: 'frozen_ocean', continent: [-0.55, -0.22], temp: [-1, -0.55], humid: [-1, 1], erosion: [-1, 1] },
-  { name: 'beach', continent: [-0.22, -0.02], temp: [-0.5, 1], humid: [-1, 1], erosion: [-1, 1] },
-  { name: 'snowy_beach', continent: [-0.22, -0.02], temp: [-1, -0.5], humid: [-1, 1], erosion: [-1, 1] },
+  // The oceanic entries are continentalness-only on purpose — whether you are
+  // at sea is genuinely not a question of temperature or rainfall. That makes
+  // them wildcards too, so they carry `oceanic` and the caller excludes them
+  // for columns that finished above sea level (see selectBiome's opts). Without
+  // that exclusion a dry coastal column could still resolve to `ocean`, whose
+  // surface is SAND — a second, subtler source of inland sand.
+  { name: 'deep_ocean', oceanic: true, continent: [-1.0, -0.55], temp: [-1, 1], humid: [-1, 1], erosion: [-1, 1] },
+  { name: 'ocean', oceanic: true, continent: [-0.55, -0.22], temp: [-1, 0.6], humid: [-1, 1], erosion: [-1, 1] },
+  { name: 'frozen_ocean', oceanic: true, continent: [-0.55, -0.22], temp: [-1, -0.55], humid: [-1, 1], erosion: [-1, 1] },
+
+  // NOTE: there are deliberately no `beach` entries here.
+  //
+  // Beaches are a SURFACE rule, not a climate: worldgen paints sand wherever a
+  // beach-bearing biome's ground sits in the shoreline height band and open
+  // water is actually within a few blocks (see _surfaceFor / _nearWater).
+  // A climate entry for beach duplicated that, and did real damage while doing
+  // it, because of how nearest-match scoring works.
+  //
+  // The classifier sums squared distance OUTSIDE each range, so an entry that
+  // leaves an axis at [-1,1] scores zero on it for every sample. `beach`
+  // constrained only continentalness and left temp/humid/erosion wide open,
+  // making it a WILDCARD: near the coast it beat every land biome, because a
+  // real biome has to satisfy three more axes while beach had to satisfy one.
+  // The coastal shelf is geometrically wide (the offset spline is flat there),
+  // so this turned roughly a third of the world into beach and made sand
+  // ~49% of all surface blocks — the "random sand everywhere" report.
+  //
+  // The general rule this encodes: every entry in this table must be
+  // comparably specific. A wildcard entry is not a fallback, it is an
+  // attractor that swallows its neighbourhood.
 
   // --- hot & dry -----------------------------------------------------
   { name: 'desert', continent: [-0.02, 1], temp: [0.45, 1], humid: [-1, -0.25], erosion: [-0.2, 1] },
@@ -330,18 +355,25 @@ export const BIOME_TABLE = [
  * and otherwise the closest one does. Cheap, total, and it degrades sensibly
  * at the edges of the space instead of falling off a cliff.
  */
-export function selectBiome(sample) {
+export function selectBiome(sample, opts) {
   const axes = [
     ['continent', sample.continent],
     ['temp', sample.temp],
     ['humid', sample.humid],
     ['erosion', sample.erosion],
   ];
+  // Dry ground must never resolve to an ocean biome. Terrain height is decided
+  // before the biome is (see worldgen._column), so the caller knows whether
+  // this column ended up above sea level and can rule the oceanic entries out.
+  // Land BELOW sea level stays eligible for everything: a river cutting
+  // through a forest should still be forest, not ocean.
+  const excludeOceanic = !!(opts && opts.excludeOceanic);
 
   let best = null;
   let bestD = Infinity;
 
   for (const entry of BIOME_TABLE) {
+    if (excludeOceanic && entry.oceanic) continue;
     let d = 0;
     for (const [axis, value] of axes) {
       const range = entry[axis];

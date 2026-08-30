@@ -166,7 +166,10 @@ export class WorldGen {
     // the climate AND that outcome. Nothing about the biome feeds back into
     // height, which is why biome borders leave no seam in the terrain.
     const c = this.climate.sample(wx, wz);
-    const biome = selectBiome(c);
+    // Height is already decided at this point, so tell the classifier whether
+    // this column came out above water. Oceanic biomes carry a SAND/GRAVEL
+    // surface; letting one win on dry ground painted beach onto hillsides.
+    const biome = selectBiome(c, { excludeOceanic: c.height >= SEA });
     // Normalised temperature (0..1) kept for the ice/decoration rules below.
     const temperature = clamp(0.5 + 0.62 * c.temp, 0, 1);
     const moisture = clamp(0.5 + 0.62 * c.humid, 0, 1);

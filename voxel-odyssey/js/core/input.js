@@ -31,6 +31,11 @@ export const DEFAULT_BINDINGS = {
   inventory: ['KeyE'],
   drop: ['KeyQ'],
   pause: ['Escape'],
+  // Free the cursor WITHOUT pausing. Escape also releases it, but Escape
+  // opens the pause menu and stops the world; this is the "let me click
+  // something else for a second" key, which is what you want when the game
+  // grabs the mouse back on every click.
+  releaseCursor: ['KeyU'],
   fly: ['KeyF'],
   debug: ['F3'],
   chat: ['KeyT'],
@@ -59,6 +64,9 @@ export class Input {
 
     this.locked = false;
     this.enabled = true;            // when false (menus), gameplay input is ignored
+    // Set by releaseCursor(): the player asked for the mouse back, so every
+    // automatic re-capture path stands down until they ask for it again.
+    this.cursorReleased = false;
 
     // Some embeddings (sandboxed iframes without allow="pointer-lock") refuse
     // the Pointer Lock API. `virtualLock` is our fallback: we hide the cursor
@@ -124,15 +132,41 @@ export class Input {
     this._onBlur = () => { this._down.clear(); this.buttons.clear(); };
 
     this._onMouseDown = (e) => {
-      // While locked (real pointer lock OR the fallback), every button press
-      // belongs to the game no matter what element it lands on. The old
-      // canvas-only binding silently ate clicks in the fallback: the cursor is
-      // hidden but still moves, so once it drifted over the hotbar or HUD,
-      // right-clicks stopped reaching the game with no visible reason why.
-      if (!this.locked && e.target !== this.canvas) return;
-      if (this.locked && e.button === 2) e.preventDefault();
-      this.buttons.add(e.button);
-      this._buttonPressed.add(e.button);
+      // Buttons register UNCONDITIONALLY. Every previous version of this
+      // handler gated on lock state or event target, and every gate turned
+      // out to eat someone's clicks in some embedding — mining and placing
+      // must never depend on where the browser thinks a click landed. Menus
+      // are safe because gameplay itself stops (mode !== 'play') while they
+      // are open; a stray button in this set does nothing then.
+      const uiTarget = e.target && e.target.closest
+        && e.target.closest('.menu-overlay, .keybind-key, button, input, select');
+      if (!uiTarget) {
+        this.buttons.add(e.button);
+        this._buttonPressed.add(e.button);
+        if (this.locked && e.button === 2) e.preventDefault();
+
+        // FORCE-LOCK: any gameplay click while playing re-attempts the real
+        // pointer lock. A mousedown is a genuine user gesture — exactly what
+        // the API requires — so this is the most reliable moment to (re)take
+        // capture, and it makes recovery automatic: if the browser dropped
+        // the lock for any reason, the very next click restores it.
+        //
+        // The one thing that must override it is a deliberate release
+        // (releaseCursor): otherwise the player could never get the mouse
+        // back, because clicking anything would immediately re-capture.
+        // Clicking the canvas itself is read as "give it back", so a release
+        // never becomes a trap either.
+        const flags = this.state && this.state.flags;
+        if (flags && flags.mode === 'play' && !flags.paused && !flags.inventoryOpen
+            && document.pointerLockElement !== this.canvas) {
+          if (this.cursorReleased) {
+            if (e.target === this.canvas) this.resumeCapture();
+          } else {
+            this._lockFailures = 0;   // a real gesture always deserves a retry
+            this.requestLock();
+          }
+        }
+      }
     };
     this._onMouseUp = (e) => {
       this.buttons.delete(e.button);
@@ -206,6 +240,7 @@ export class Input {
         this._fsRelock = null;
         const flags = this.state && this.state.flags;
         if (!flags || flags.mode !== 'play' || flags.paused || flags.inventoryOpen) return;
+        if (this.cursorReleased) return;   // the player asked for the mouse back
         this._lockFailures = 0;   // a fullscreen change is a fresh start
         this.requestLock();
       }, 120);
@@ -312,11 +347,30 @@ export class Input {
     if (this._lockRetry) clearTimeout(this._lockRetry);
     this._lockRetry = setTimeout(() => {
       this._lockRetry = null;
-      if (this.virtualLock && this.state && this.state.flags && this.state.flags.mode === 'play'
+      if (this.virtualLock && !this.cursorReleased
+        && this.state && this.state.flags && this.state.flags.mode === 'play'
         && !this.state.flags.paused && !this.state.flags.inventoryOpen) {
         this.requestLock();
       }
     }, 1200);
+  }
+
+  /* Deliberately hand the cursor back to the player, without pausing.
+     `cursorReleased` latches so the click-to-capture path above stands down;
+     nothing else re-locks on its own, so the mouse genuinely stays free. */
+  releaseCursor() {
+    this.cursorReleased = true;
+    if (this._lockRetry) { clearTimeout(this._lockRetry); this._lockRetry = null; }
+    this.exitLock();
+  }
+
+  /* Take capture back (clicking the canvas, or pressing the release key
+     again). Clearing the failure count matters: a release-then-resume is a
+     fresh user gesture and deserves a real attempt, not the fallback. */
+  resumeCapture() {
+    this.cursorReleased = false;
+    this._lockFailures = 0;
+    this.requestLock();
   }
 
   exitLock() {

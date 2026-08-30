@@ -263,5 +263,53 @@ const DECOR = new Set([ID.LOG, ID.BIRCH_LOG, ID.PINE_LOG, ID.LEAVES, ID.BIRCH_LE
   ok('lava: never floats over air', lavaOverAir === 0, `${lavaOverAir}`);
 }
 
+/* ---- surface composition -------------------------------------------------
+   The failure this guards against is not a crash — the world generates fine
+   and simply looks wrong. `beach` used to be a BIOME_TABLE entry constrained
+   only on continentalness, which made it a wildcard: nearest-match scoring
+   gave it distance 0 on temperature, humidity and erosion, so it beat every
+   specific land biome anywhere near the coast and turned ~a third of the
+   world into sand. Beaches belong to the surface rule (_surfaceFor +
+   _nearWater), which paints a narrow band where land actually meets sea.
+
+   These assertions are statistical on purpose: they describe what the world
+   should LOOK like, which is the property that regressed. */
+{
+  const wg = mkGen(0x9e3779b9);
+  const R = 200, STEP = 4;
+  let land = 0, grass = 0, sand = 0;
+  let oceanicOnLand = 0;
+  const seen = new Set();
+
+  for (let x = -R; x <= R; x += STEP) {
+    for (let z = -R; z <= R; z += STEP) {
+      const h = wg.heightAt(x, z);
+      const biome = wg.biomeAt(x, z);
+      seen.add(biome);
+      if (h < WATER_LEVEL) continue;      // seafloor sand is correct + unseen
+      land++;
+      if (/ocean/.test(biome)) oceanicOnLand++;
+      const id = wg.blockAt(x, h, z);
+      if (id === ID.GRASS) grass++;
+      else if (id === ID.SAND) sand++;
+    }
+  }
+
+  ok('surface: sampled real land', land > 500, `${land}`);
+  // Deserts are legitimately sandy, so this is a ceiling, not zero.
+  ok('surface: land is mostly grass', grass / land > 0.6,
+    `grass ${(100 * grass / land).toFixed(1)}%`);
+  ok('surface: land is not swamped by sand', sand / land < 0.3,
+    `sand ${(100 * sand / land).toFixed(1)}%`);
+  // An ocean biome carries a SAND/GRAVEL surface; on dry ground that reads as
+  // beach painted up a hillside.
+  ok('surface: no oceanic biome on dry land', oceanicOnLand === 0, `${oceanicOnLand}`);
+  ok('surface: beach is not a selectable biome', !seen.has('beach') && !seen.has('snowy_beach'),
+    [...seen].join(','));
+  // ...but the shoreline rule must still actually produce sand somewhere.
+  ok('surface: shorelines still have sand', sand > 0, `${sand}`);
+  ok('surface: several biomes present', seen.size >= 4, [...seen].join(','));
+}
+
 console.log(`\n==== worldgen: ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);

@@ -607,10 +607,17 @@ export class Sky {
      (see world/lighting.js) and combined with these at draw time, so a sunset
      recolours the entire world without re-meshing a single chunk. */
   getTerrainLight() {
+    const s = this._sunDirScratch || (this._sunDirScratch = new THREE.Vector3(0, 1, 0));
+    this.getSunDirection(s);
+    // Below the horizon the light source is the moon, which sits opposite the
+    // sun — flip rather than letting terrain shade toward a sun that is
+    // underground.
+    if (s.y < 0) s.multiplyScalar(-1);
     return {
       daylight: this._terrainDaylight,
       skyTint: this._terrainTint,
       time: this._elapsed || 0,
+      sunDir: s,
     };
   }
 

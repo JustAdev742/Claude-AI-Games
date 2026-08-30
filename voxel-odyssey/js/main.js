@@ -229,7 +229,9 @@ async function boot() {
 
   canvas.addEventListener('click', () => {
     if (state.mode === 'play' && !state.flags.paused && !state.flags.inventoryOpen && !input.locked) {
-      input.requestLock();
+      // Clicking the canvas is itself the request for capture, so it clears a
+      // deliberate release rather than being blocked by it.
+      input.resumeCapture();
       game.audio.resume();
     }
   });
@@ -308,7 +310,7 @@ async function boot() {
     game.menus.hide();
     game.hud.setVisible(true);
     events.emit('mode:change', { mode: 'play' });
-    input.requestLock();
+    input.resumeCapture();
     game.audio.resume();
     game.audio.startMusic && game.audio.startMusic();
   }
@@ -321,7 +323,7 @@ async function boot() {
   function resumePlay() {
     state.flags.paused = false;
     game.menus.hide();
-    input.requestLock();
+    input.resumeCapture();
   }
   function quitToMenu() {
     state.mode = 'menu';
@@ -405,6 +407,18 @@ async function boot() {
         }
         if (!state.flags.paused && input.actionPressed('debug')) {
           state.flags.debug = !state.flags.debug;
+        }
+        // Release the cursor without pausing. Needed because a click now
+        // re-takes pointer lock unconditionally (see input._onMouseDown), so
+        // without a deliberate release there is no way to get the mouse back
+        // other than opening a menu. `_cursorReleased` suppresses the
+        // click-to-relock until the player asks for capture again.
+        if (!state.flags.paused && input.actionPressed('releaseCursor')) {
+          if (input.cursorReleased) input.resumeCapture();
+          else input.releaseCursor();
+          game.toast(input.cursorReleased
+            ? 'Mouse released — click the game to capture it again'
+            : 'Mouse captured');
         }
         // Our own fullscreen toggle, so entering it goes through the path that
         // re-takes pointer lock afterwards. The browser's own F11 bypasses us

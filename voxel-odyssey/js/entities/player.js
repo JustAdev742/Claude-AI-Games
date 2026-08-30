@@ -312,6 +312,14 @@ export class Player {
     // --- toggles: creative flight via fly action or double-tap jump ---
     const jumpDown = input.action('jump');
     const jumpTapped = jumpDown && !this._jumpWasDown;
+
+    // Jump FEEL state. Coyote time forgives pressing jump just after walking
+    // off an edge; the buffer forgives pressing it just before landing. Both
+    // are a few frames wide, and together they remove the "my jump ate the
+    // input" moments that read as unresponsive controls.
+    this._coyote = this.onGround ? 0.12 : Math.max(0, (this._coyote || 0) - dt);
+    if (jumpTapped) this._jumpBuffer = 0.14;
+    else this._jumpBuffer = Math.max(0, (this._jumpBuffer || 0) - dt);
     if (input.actionPressed && input.actionPressed('fly') && this.isCreative) {
       this.flying = !this.flying;
       this.velocity.y = 0;
@@ -413,11 +421,35 @@ export class Player {
       }
       // Extra drag in water.
       this.velocity.y *= (1 - clamp(2.5 * dt, 0, 0.6));
+
+      // CLIMBING OUT. Buoyancy alone can never beat the ledge geometry: at
+      // the pond's edge the swimmer bobs at eye level with the bank, presses
+      // forward, and scrapes against the wall forever. When jump is held and
+      // the block AHEAD at foot level is solid with clear space above it,
+      // give a real jump impulse — enough to clear the lip and land on it.
+      if (jumpDown && (Math.abs(wishX) > 0.1 || Math.abs(wishZ) > 0.1)) {
+        const wl = Math.hypot(wishX, wishZ) || 1;
+        const ax = Math.floor(this.position.x + (wishX / wl) * 0.75);
+        const az = Math.floor(this.position.z + (wishZ / wl) * 0.75);
+        const fy = Math.floor(this.position.y + 0.1);
+        const wgB = (x, y, z) => world && world.getBlock ? world.getBlock(x, y, z) : 0;
+        const ledge = Blocks.isSolid(wgB(ax, fy, az)) || Blocks.isSolid(wgB(ax, fy + 1, az));
+        const headroom = !Blocks.isSolid(wgB(ax, fy + 2, az)) && !Blocks.isSolid(wgB(ax, fy + 3, az));
+        if (ledge && headroom) {
+          this.velocity.y = Math.max(this.velocity.y, JUMP_SPEED * 1.05);
+        }
+      }
     } else {
-      // Normal gravity + jump.
-      if (jumpDown && this.onGround) {
+      // Normal gravity + jump, with coyote time and input buffering: holding
+      // jump hops continuously on landing (as before), and a tap fires if the
+      // ground arrives within the buffer window or was left within the coyote
+      // window.
+      const canJump = this.onGround || this._coyote > 0;
+      if ((jumpDown && this.onGround) || (this._jumpBuffer > 0 && canJump)) {
         this.velocity.y = JUMP_SPEED;
         this.onGround = false;
+        this._coyote = 0;
+        this._jumpBuffer = 0;
         // Sprint-jump preserves a bit of momentum (handled by air accel).
         this._emitSfx('step', { surface: this._groundSurface() });
       }

@@ -52,6 +52,7 @@ const VERT = /* glsl */`
   varying vec2 vUv;
   varying float vTexIdx;
   varying vec3 vWorldPos;
+  varying vec3 vNormal;
 
   uniform float uTime;
   uniform float uWaveStrength;  // >0 makes foliage/liquids sway
@@ -64,6 +65,11 @@ const VERT = /* glsl */`
     vAO = aAO;
     vUv = uv;
     vTexIdx = aTexIdx;
+    // World-space normal for the sun term. mat3(modelMatrix) rather than
+    // normalMatrix because normalMatrix goes to VIEW space, and the sun
+    // direction uniform is a world-space vector. Chunk meshes only translate
+    // (mat3 = identity); the held-item viewmodel actually rotates.
+    vNormal = mat3(modelMatrix) * normal;
 
     vec3 pos = position;
 
@@ -102,6 +108,7 @@ const FRAG = /* glsl */`
   varying vec2 vUv;
   varying float vTexIdx;
   varying vec3 vWorldPos;
+  varying vec3 vNormal;
 
   // A texture ARRAY, not an atlas image: each block texture owns a layer, so
   // mip filtering can never blend one block's texels into another's. vTexIdx
@@ -110,6 +117,7 @@ const FRAG = /* glsl */`
   uniform float uHasAtlas;
   uniform vec3 uSkyTint;      // colour sunlight contributes (warm at dusk)
   uniform vec3 uBlockTint;    // colour torches contribute (fixed warm orange)
+  uniform vec3 uSunDir;       // world-space direction toward the sun/moon
   uniform float uDaylight;    // 0 = midnight, 1 = noon
   uniform float uAmbient;     // floor so caves are dark but not unreadable
   uniform float uOpacity;
@@ -134,7 +142,17 @@ const FRAG = /* glsl */`
     float sky = lightCurve(vLight.x) * uDaylight;
     float blk = lightCurve(vLight.y);
 
-    vec3 skyContrib = uSkyTint * sky;
+    // Directional sun term. Only the SKY channel gets it — torchlight is
+    // omnidirectional. Faces turned toward the sun brighten through the day
+    // as it arcs overhead; the 0.72 floor keeps away-facing sides lit by sky
+    // scatter rather than pitch black (the baked flood-fill already handles
+    // true occlusion). Back faces of double-sided foliage flip the normal so
+    // both sides of a cross-quad read identically.
+    vec3 N = normalize(vNormal);
+    if (!gl_FrontFacing) N = -N;
+    float ndl = 0.72 + 0.28 * max(dot(N, uSunDir), 0.0);
+
+    vec3 skyContrib = uSkyTint * sky * ndl;
     vec3 blkContrib = uBlockTint * blk;
 
     // Take the stronger channel and add a fraction of the weaker one. A plain
@@ -170,6 +188,7 @@ export function createSharedUniforms() {
     uHasAtlas: { value: 0 },
     uSkyTint: { value: new THREE.Color(1, 1, 1) },
     uBlockTint: { value: new THREE.Color(1.0, 0.78, 0.52) },
+    uSunDir: { value: new THREE.Vector3(0.35, 0.85, 0.4).normalize() },
     uDaylight: { value: 1 },
     uAmbient: { value: 0.035 },
     uTime: { value: 0 },
@@ -266,6 +285,7 @@ export function updateVoxelUniforms(shared, skyState) {
     shared.uSkyTint.value.setRGB(skyState.skyTint[0], skyState.skyTint[1], skyState.skyTint[2]);
   }
   if (typeof skyState.time === 'number') shared.uTime.value = skyState.time;
+  if (skyState.sunDir) shared.uSunDir.value.copy(skyState.sunDir);
   // Night keeps a faint blue ambient so open ground under moonlight still
   // reads as ground, while enclosed caves (skylight 0) stay genuinely dark.
   shared.uAmbient.value = 0.028 + 0.012 * d;
