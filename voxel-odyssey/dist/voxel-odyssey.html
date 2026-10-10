@@ -32268,8 +32268,12 @@ var ID = {
   REDSTONE_ORE: 39,
   LANTERN: 40,
   LAVA: 41,
-  FURNACE_LIT: 42
+  FURNACE_LIT: 42,
   // the furnace while it is burning (placed/removed by the furnace system)
+  SAPLING_OAK: 43,
+  SAPLING_BIRCH: 44,
+  SAPLING_PINE: 45,
+  CHEST: 46
 };
 Object.freeze(ID);
 function def(o) {
@@ -32380,6 +32384,7 @@ register(ID.LEAVES, "leaves", {
   tool: "any",
   flammable: true,
   drop: "sapling_oak",
+  dropChance: 0.12,
   walkSound: "grass"
 });
 register(ID.PLANKS, "planks", {
@@ -32571,6 +32576,7 @@ register(ID.BIRCH_LEAVES, "birch_leaves", {
   tool: "any",
   flammable: true,
   drop: "sapling_birch",
+  dropChance: 0.12,
   walkSound: "grass"
 });
 register(ID.PINE_LOG, "pine_log", {
@@ -32592,6 +32598,49 @@ register(ID.PINE_LEAVES, "pine_leaves", {
   tool: "any",
   flammable: true,
   drop: "sapling_pine",
+  dropChance: 0.12,
+  walkSound: "grass"
+});
+register(ID.CHEST, "chest", {
+  name: "Chest",
+  color: rgb(150, 104, 54),
+  top: rgb(138, 96, 50),
+  hardness: 1.4,
+  tool: "axe",
+  flammable: true,
+  walkSound: "wood"
+});
+register(ID.SAPLING_OAK, "sapling_oak", {
+  name: "Oak Sapling",
+  solid: false,
+  transparent: true,
+  opacity: 0,
+  render: "cross",
+  color: rgb(72, 140, 60),
+  hardness: 0,
+  tool: "any",
+  walkSound: "grass"
+});
+register(ID.SAPLING_BIRCH, "sapling_birch", {
+  name: "Birch Sapling",
+  solid: false,
+  transparent: true,
+  opacity: 0,
+  render: "cross",
+  color: rgb(120, 160, 90),
+  hardness: 0,
+  tool: "any",
+  walkSound: "grass"
+});
+register(ID.SAPLING_PINE, "sapling_pine", {
+  name: "Pine Sapling",
+  solid: false,
+  transparent: true,
+  opacity: 0,
+  render: "cross",
+  color: rgb(48, 100, 70),
+  hardness: 0,
+  tool: "any",
   walkSound: "grass"
 });
 register(ID.FLOWER_RED, "flower_red", {
@@ -32836,7 +32885,8 @@ function addBlockItem(blockId, extra = {}) {
   ID.TALL_GRASS,
   ID.MUSHROOM_RED,
   ID.TORCH,
-  ID.CLAY
+  ID.CLAY,
+  ID.CHEST
 ].forEach((id) => addBlockItem(id));
 add("coal", { name: "Coal", desc: "Fuel and torches.", icon: { kind: "shape", shape: "coal", color: rgb(40, 40, 44) } });
 add("charcoal", { name: "Charcoal", desc: "Smelted wood fuel.", icon: { kind: "shape", shape: "coal", color: rgb(54, 50, 46) } });
@@ -32855,9 +32905,9 @@ add("bone", { name: "Bone", desc: "Rattles when shaken.", icon: { kind: "shape",
 add("leather", { name: "Leather", desc: "Tough animal hide.", icon: { kind: "shape", shape: "lump", color: rgb(150, 100, 60) } });
 add("feather", { name: "Feather", desc: "Light as air.", icon: { kind: "shape", shape: "stick", color: rgb(240, 240, 245) } });
 add("gunpowder", { name: "Gunpowder", desc: "Goes boom.", icon: { kind: "shape", shape: "dust", color: rgb(90, 90, 96) } });
-add("sapling_oak", { name: "Oak Sapling", category: "material", desc: "A tiny tree.", icon: { kind: "shape", shape: "sapling", color: rgb(72, 140, 60) } });
-add("sapling_birch", { name: "Birch Sapling", category: "material", desc: "A tiny tree.", icon: { kind: "shape", shape: "sapling", color: rgb(120, 160, 90) } });
-add("sapling_pine", { name: "Pine Sapling", category: "material", desc: "A tiny tree.", icon: { kind: "shape", shape: "sapling", color: rgb(48, 100, 70) } });
+add("sapling_oak", { name: "Oak Sapling", category: "material", blockId: ID.SAPLING_OAK, desc: "Plant on grass or dirt; it grows into a tree.", icon: { kind: "shape", shape: "sapling", color: rgb(72, 140, 60) } });
+add("sapling_birch", { name: "Birch Sapling", category: "material", blockId: ID.SAPLING_BIRCH, desc: "Plant on grass or dirt; it grows into a tree.", icon: { kind: "shape", shape: "sapling", color: rgb(120, 160, 90) } });
+add("sapling_pine", { name: "Pine Sapling", category: "material", blockId: ID.SAPLING_PINE, desc: "Plant on grass or dirt; it grows into a tree.", icon: { kind: "shape", shape: "sapling", color: rgb(48, 100, 70) } });
 add("apple", { name: "Apple", category: "food", food: 4, desc: "Restores 4 HP.", icon: { kind: "shape", shape: "apple", color: rgb(210, 50, 50) } });
 add("bread", { name: "Bread", category: "food", food: 6, desc: "Restores 6 HP.", icon: { kind: "shape", shape: "bread", color: rgb(196, 150, 80) } });
 add("wheat", { name: "Wheat", category: "material", desc: "Bake into bread.", icon: { kind: "shape", shape: "stick", color: rgb(214, 190, 90) } });
@@ -32952,6 +33002,11 @@ var Items = {
   dropFor(blockId) {
     const b = blocks_default.get(blockId);
     return b.drop || null;
+  },
+  // Chance (0..1) that breaking the block actually yields its drop.
+  dropChance(blockId) {
+    const b = blocks_default.get(blockId);
+    return typeof b.dropChance === "number" ? b.dropChance : 1;
   },
   drawIcon
 };
@@ -33785,6 +33840,74 @@ function selectBiome(sample2, opts) {
   return best ? best.name : "plains";
 }
 
+// js/world/trees.js
+var TREE_KINDS = ["oak", "birch", "pine"];
+var SPECIES = {
+  oak: { log: ID.LOG, leaf: ID.LEAVES, sapling: ID.SAPLING_OAK },
+  birch: { log: ID.BIRCH_LOG, leaf: ID.BIRCH_LEAVES, sapling: ID.SAPLING_BIRCH },
+  pine: { log: ID.PINE_LOG, leaf: ID.PINE_LEAVES, sapling: ID.SAPLING_PINE }
+};
+function treeSpecies(kind) {
+  return SPECIES[kind] || SPECIES.oak;
+}
+function kindOfSapling(blockId) {
+  for (const k of TREE_KINDS) if (SPECIES[k].sapling === blockId) return k;
+  return null;
+}
+function treeBlocks(kind, r, headroom = 64) {
+  const sp = treeSpecies(kind);
+  let trunkH, shape;
+  if (kind === "birch") {
+    trunkH = 5 + Math.floor(r() * 2);
+    shape = "round";
+  } else if (kind === "pine") {
+    trunkH = 6 + Math.floor(r() * 3);
+    shape = "cone";
+  } else {
+    trunkH = 4 + Math.floor(r() * 2);
+    shape = "round";
+  }
+  const radius = 2;
+  const topY = trunkH - 1;
+  if (topY + radius > headroom) trunkH = Math.max(3, headroom - radius);
+  const blocks = [];
+  for (let i = 0; i < trunkH; i++) blocks.push({ dx: 0, dy: i, dz: 0, id: sp.log, leaf: false });
+  if (shape === "cone") {
+    const top = trunkH - 1;
+    for (let y = 1; y <= top + 1; y++) {
+      const ring = top + 1 - y;
+      const rad = ring >= 4 ? 2 : ring >= 2 ? 1 : 0;
+      if (rad === 0) {
+        if (y > top) blocks.push({ dx: 0, dy: y, dz: 0, id: sp.leaf, leaf: true });
+        continue;
+      }
+      for (let dx = -rad; dx <= rad; dx++) {
+        for (let dz = -rad; dz <= rad; dz++) {
+          if (Math.abs(dx) === rad && Math.abs(dz) === rad) continue;
+          if (dx === 0 && dz === 0 && y <= top) continue;
+          blocks.push({ dx, dy: y, dz, id: sp.leaf, leaf: true });
+        }
+      }
+    }
+  } else {
+    const topLogY = trunkH - 1;
+    const layers = [{ dy: -1, rad: 2 }, { dy: 0, rad: 2 }, { dy: 1, rad: 1 }, { dy: 2, rad: 1 }];
+    for (const layer of layers) {
+      const y = topLogY + layer.dy;
+      if (y < 0) continue;
+      const rad = layer.rad;
+      for (let dx = -rad; dx <= rad; dx++) {
+        for (let dz = -rad; dz <= rad; dz++) {
+          if (dx === 0 && dz === 0 && layer.dy <= 0) continue;
+          if (rad === 2 && Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+          blocks.push({ dx, dy: y, dz, id: sp.leaf, leaf: true });
+        }
+      }
+    }
+  }
+  return { trunkH, blocks };
+}
+
 // js/world/worldgen.js
 var SEA = WATER_LEVEL;
 var MAX_Y = CHUNK_SY - 1;
@@ -34266,88 +34389,18 @@ var WorldGen = class {
     chunk.setLocal(lx, y, lz, id);
   }
   // Build a tree of the given kind. `baseY` is the y of the trunk's bottom
-  // (i.e. the cell directly above the ground). Trunk/leaf blocks that would
-  // fall outside this chunk's [0,16) x/z columns are clamped/skipped so a
-  // chunk never tries to write a neighbour's voxels.
+  // (i.e. the cell directly above the ground). The shape itself comes from
+  // trees.js, which saplings share. Trunk/leaf blocks that would fall outside
+  // this chunk's [0,16) x/z columns are skipped so a chunk never tries to
+  // write a neighbour's voxels.
   _tree(chunk, lx, lz, baseY, kind, r) {
-    let logId, leafId, trunkH, radius, shape;
-    if (kind === "birch") {
-      logId = ID.BIRCH_LOG;
-      leafId = ID.BIRCH_LEAVES;
-      trunkH = 5 + Math.floor(r() * 2);
-      radius = 2;
-      shape = "round";
-    } else if (kind === "pine") {
-      logId = ID.PINE_LOG;
-      leafId = ID.PINE_LEAVES;
-      trunkH = 6 + Math.floor(r() * 3);
-      radius = 2;
-      shape = "cone";
-    } else {
-      logId = ID.LOG;
-      leafId = ID.LEAVES;
-      trunkH = 4 + Math.floor(r() * 2);
-      radius = 2;
-      shape = "round";
-    }
-    const topY = baseY + trunkH - 1;
-    if (topY + radius > MAX_Y) {
-      trunkH = Math.max(3, MAX_Y - radius - baseY);
-      if (trunkH < 3) return;
-    }
-    for (let i = 0; i < trunkH; i++) {
-      const y = baseY + i;
-      if (y > MAX_Y) break;
-      if (this._canOverwrite(chunk.getLocal(lx, y, lz))) {
-        chunk.setLocal(lx, y, lz, logId);
-      }
-    }
-    if (shape === "cone") {
-      this._pineCanopy(chunk, lx, lz, baseY, trunkH, leafId);
-    } else {
-      this._roundCanopy(chunk, lx, lz, baseY + trunkH - 1, leafId);
-    }
-  }
-  // Spherical-ish canopy centered near the trunk top for oak/birch.
-  _roundCanopy(chunk, lx, lz, topLogY, leafId) {
-    const layers = [
-      { dy: -1, rad: 2 },
-      { dy: 0, rad: 2 },
-      { dy: 1, rad: 1 },
-      { dy: 2, rad: 1 }
-    ];
-    for (const layer of layers) {
-      const y = topLogY + layer.dy;
-      if (y < 0 || y > MAX_Y) continue;
-      const rad = layer.rad;
-      for (let dx = -rad; dx <= rad; dx++) {
-        for (let dz = -rad; dz <= rad; dz++) {
-          if (dx === 0 && dz === 0 && layer.dy <= 0) continue;
-          if (rad === 2 && Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
-          this._placeLeaf(chunk, lx + dx, y, lz + dz, leafId);
-        }
-      }
-    }
-  }
-  // Conical layered canopy for pines: wide at the bottom, narrowing upward.
-  _pineCanopy(chunk, lx, lz, baseY, trunkH, leafId) {
-    const startY = baseY + 1;
-    const top = baseY + trunkH - 1;
-    let rad = 2;
-    for (let y = startY; y <= top + 1; y++) {
-      if (y < 0 || y > MAX_Y) continue;
-      const ring = top + 1 - y;
-      rad = ring >= 4 ? 2 : ring >= 2 ? 1 : 0;
-      if (rad === 0) {
-        this._placeLeaf(chunk, lx, y, lz, leafId);
-        continue;
-      }
-      for (let dx = -rad; dx <= rad; dx++) {
-        for (let dz = -rad; dz <= rad; dz++) {
-          if (Math.abs(dx) === rad && Math.abs(dz) === rad) continue;
-          if (dx === 0 && dz === 0 && y <= top) continue;
-          this._placeLeaf(chunk, lx + dx, y, lz + dz, leafId);
-        }
+    const tree = treeBlocks(kind, r, MAX_Y - baseY);
+    for (const b of tree.blocks) {
+      const y = baseY + b.dy;
+      if (b.leaf) {
+        this._placeLeaf(chunk, lx + b.dx, y, lz + b.dz, b.id);
+      } else if (y <= MAX_Y && this._canOverwrite(chunk.getLocal(lx, y, lz))) {
+        chunk.setLocal(lx, y, lz, b.id);
       }
     }
   }
@@ -35543,7 +35596,19 @@ var FRAG = (
     vec3 lit = albedo * light * ao;
     float alpha = base.a * uOpacity;
 
-    if (uIsWater > 0.5) {
+    if (uIsWater > 0.5 && N.y < -0.5) {
+      // The surface seen from UNDER the water. Looking up inside the critical
+      // angle you see the sky through a bright circular window; outside it the
+      // surface is a mirror of the dark water below.
+      vec2 g = waterSlope(vWorldPos.xz, uTime);
+      vec3 Nu = normalize(vec3(g.x, -1.0, g.y));
+      float cosT = clamp(dot(Nu, V), 0.0, 1.0);
+      float window = smoothstep(0.58, 0.74, cosT);
+      vec3 sky = mix(uHorizon, uZenith, 0.55) * (0.5 + 0.5 * sunVis);
+      vec3 deep = lit * 0.45;
+      lit = mix(deep, sky * 0.9, window);
+      alpha = 0.94;
+    } else if (uIsWater > 0.5) {
       // Fresnel: look straight down and you see through the water; look along
       // it and you see the sky in it.
       float cosT = max(dot(Nl, V), 0.0);
@@ -35629,7 +35694,9 @@ function createVoxelMaterials(shared) {
     transparent: true,
     depthWrite: false,
     // don't occlude other transparent surfaces
-    side: FrontSide
+    // Double-sided: from below, the surface is the "ceiling" of the water, and
+    // the shader draws it as a window onto the sky (see uIsWater below).
+    side: DoubleSide
   }, {
     uOpacity: { value: 0.66 },
     uWaveStrength: { value: 0.35 },
@@ -36589,6 +36656,7 @@ var Player = class {
     this.onGround = false;
     this.inWater = false;
     this.headUnderwater = false;
+    this.eyesUnderWater = false;
     this.flying = false;
     this.sneaking = false;
     this.sprinting = false;
@@ -36778,6 +36846,7 @@ var Player = class {
       this.position.y + this._eyeY,
       this.position.z
     );
+    this.eyesUnderWater = this.headUnderwater;
     const jumpDown = input.action("jump");
     const jumpTapped = jumpDown && !this._jumpWasDown;
     this._coyote = this.onGround ? 0.12 : Math.max(0, (this._coyote || 0) - dt);
@@ -37210,7 +37279,7 @@ var Player = class {
     }
     if (this.game.state) this.game.state.addStat("blocksMined", 1);
     if (drop && (blocks_default.get(blockId) || {}).hardness > 0) this._wearHeldTool(1);
-    if (drop) {
+    if (drop && Math.random() < items_default.dropChance(blockId)) {
       const dropKey = items_default.dropFor(blockId);
       if (dropKey && this.game.entities && typeof this.game.entities.dropItem === "function") {
         try {
@@ -37271,6 +37340,12 @@ var Player = class {
           return;
         }
       }
+      if (hit.blockId === ID.CHEST) {
+        if (this.game.menus && typeof this.game.menus.openChest === "function") {
+          this.game.menus.openChest(hit.block.x, hit.block.y, hit.block.z);
+          return;
+        }
+      }
       if (hit.blockId === ID.FURNACE || hit.blockId === ID.FURNACE_LIT) {
         if (this.game.menus && typeof this.game.menus.openFurnace === "function") {
           this.game.menus.openFurnace(hit.block.x, hit.block.y, hit.block.z);
@@ -37309,6 +37384,13 @@ var Player = class {
     const targetDef = blocks_default.get(targetId);
     const replaceable = targetId === ID.AIR || targetDef && (targetDef.render === "cross" || targetDef.liquid);
     if (!replaceable) return;
+    if (kindOfSapling(blockId)) {
+      const under = world.getBlock(px2, py2 - 1, pz2);
+      if (under !== ID.GRASS && under !== ID.DIRT) {
+        this.game.toast("Saplings need grass or dirt", "warn");
+        return;
+      }
+    }
     if (blocks_default.isSolid(blockId) && this._aabbOverlapsCell(px2, py2, pz2)) return;
     if (!this.isCreative) {
       if (!inv || typeof inv.removeSelected !== "function") return;
@@ -40097,6 +40179,17 @@ function buildRecipes() {
     "furnace",
     1
   ));
+  out.push(shaped(
+    "chest",
+    "Chest",
+    [
+      ["planks", "planks", "planks"],
+      ["planks", null, "planks"],
+      ["planks", "planks", "planks"]
+    ],
+    "chest",
+    1
+  ));
   out.push(shaped("torch", "Torch", [["coal"], ["stick"]], "torch", 4));
   out.push(shaped("torch_charcoal", "Torch (Charcoal)", [["charcoal"], ["stick"]], "torch", 4));
   out.push(shaped(
@@ -40354,6 +40447,232 @@ var Furnaces = class {
     }
   }
 };
+
+// js/items/chest.js
+var CHEST_SLOTS = 27;
+var keyOf2 = (x, y, z) => `${x | 0},${y | 0},${z | 0}`;
+function moveInto(slots, stack) {
+  if (!stack || !stack.id || !(stack.count > 0)) return 0;
+  const max = items_default.stackSize(stack.id);
+  let left = stack.count;
+  if (!stack.wear) {
+    for (let i = 0; i < slots.length && left > 0; i++) {
+      const s = slots[i];
+      if (s && s.id === stack.id && !s.wear && s.count < max) {
+        const n = Math.min(max - s.count, left);
+        s.count += n;
+        left -= n;
+      }
+    }
+  }
+  for (let i = 0; i < slots.length && left > 0; i++) {
+    if (slots[i] == null) {
+      const n = Math.min(max, left);
+      slots[i] = cloneStack(stack, n);
+      left -= n;
+    }
+  }
+  return left;
+}
+var Chests = class {
+  constructor(game) {
+    this.game = game || null;
+    this.states = /* @__PURE__ */ new Map();
+    this._unsubs = [];
+  }
+  init() {
+    const ev = this.game && this.game.events;
+    if (ev) {
+      this._unsubs.push(ev.on("block:break", (e) => {
+        if (e && e.blockId === ID.CHEST) this.removeAt(e.x, e.y, e.z);
+      }));
+    }
+    return this;
+  }
+  reset() {
+    this.states.clear();
+  }
+  get(x, y, z) {
+    return this.states.get(keyOf2(x, y, z)) || null;
+  }
+  ensure(x, y, z) {
+    const k = keyOf2(x, y, z);
+    let st = this.states.get(k);
+    if (!st) {
+      st = { slots: new Array(CHEST_SLOTS).fill(null) };
+      this.states.set(k, st);
+    }
+    return st;
+  }
+  // Everything a chest holds, for spilling or counting.
+  contents(st) {
+    return st.slots.filter(Boolean);
+  }
+  // A chest block is gone: its contents drop into the world.
+  removeAt(x, y, z) {
+    const k = keyOf2(x, y, z);
+    const st = this.states.get(k);
+    if (!st) return;
+    this.states.delete(k);
+    const ents = this.game && this.game.entities;
+    if (!ents || typeof ents.dropItem !== "function") return;
+    for (const s of this.contents(st)) {
+      try {
+        ents.dropItem(x + 0.5, y + 0.5, z + 0.5, s.id, s.count);
+      } catch (_) {
+      }
+    }
+  }
+  /* ---- persistence ------------------------------------------------------ */
+  serialize() {
+    const out = [];
+    for (const [k, st] of this.states) {
+      if (!st.slots.some(Boolean)) continue;
+      out.push({ k, slots: st.slots.map((s) => cloneStack(s)) });
+    }
+    return out;
+  }
+  load(arr) {
+    this.states.clear();
+    if (!Array.isArray(arr)) return;
+    for (const e of arr) {
+      if (!e || typeof e.k !== "string" || !Array.isArray(e.slots)) continue;
+      const slots = new Array(CHEST_SLOTS).fill(null);
+      for (let i = 0; i < CHEST_SLOTS; i++) {
+        const s = e.slots[i];
+        if (s && typeof s.id === "string" && items_default.has(s.id) && s.count > 0) {
+          slots[i] = { id: s.id, count: Math.min(items_default.stackSize(s.id), Math.floor(s.count)) };
+          const max = items_default.durability(s.id);
+          if (max > 0 && s.wear > 0) slots[i].wear = Math.min(max - 1, Math.floor(s.wear));
+        }
+      }
+      this.states.set(e.k, { slots });
+    }
+  }
+};
+
+// js/world/growth.js
+var GROW_MIN = 45;
+var GROW_MAX = 120;
+var RETRY_MIN = 20;
+var RETRY_MAX = 45;
+var MAX_TRIES = 6;
+var MIN_SKYLIGHT = 9;
+var MIN_CANOPY_FREE = 0.7;
+var keyOf3 = (x, y, z) => `${x},${y},${z}`;
+var Growth = class {
+  constructor(game) {
+    this.game = game || null;
+    this.saplings = /* @__PURE__ */ new Map();
+    this._unsubs = [];
+  }
+  init() {
+    const ev = this.game && this.game.events;
+    if (ev) {
+      this._unsubs.push(ev.on("block:update", (e) => {
+        if (e) this.noteBlock(e.x, e.y, e.z);
+      }));
+    }
+    return this;
+  }
+  reset() {
+    this.saplings.clear();
+  }
+  // (Re)check one position: track it if it holds a sapling, forget it if not.
+  noteBlock(x, y, z) {
+    const world = this.game && this.game.world;
+    if (!world) return;
+    const k = keyOf3(x, y, z);
+    if (kindOfSapling(world.getBlock(x, y, z))) {
+      if (!this.saplings.has(k)) this.saplings.set(k, { x, y, z, timer: this._delay(GROW_MIN, GROW_MAX), tries: 0 });
+    } else {
+      this.saplings.delete(k);
+    }
+  }
+  // After loading a save: every sapling recorded in the world's edits.
+  scanEdits() {
+    const world = this.game && this.game.world;
+    if (!world || !world.edits) return;
+    for (const [k, id] of world.edits) {
+      if (!kindOfSapling(id)) continue;
+      const [x, y, z] = k.split(",").map(Number);
+      if (!this.saplings.has(k)) this.saplings.set(k, { x, y, z, timer: this._delay(GROW_MIN, GROW_MAX), tries: 0 });
+    }
+  }
+  // Random spread, so a row of saplings does not all grow on the same frame.
+  // (Timing is deliberately not deterministic; the tree's SHAPE is.)
+  _delay(lo, hi) {
+    return lo + Math.random() * (hi - lo);
+  }
+  _loaded(x, z) {
+    const world = this.game && this.game.world;
+    if (!world || typeof world.getChunk !== "function") return true;
+    return !!world.getChunk(Math.floor(x / CHUNK_SX), Math.floor(z / CHUNK_SZ));
+  }
+  update(dt) {
+    if (!this.saplings.size) return;
+    const net = this.game && this.game.net;
+    if (net && net.connected) return;
+    for (const [k, s] of this.saplings) {
+      if (!this._loaded(s.x, s.z)) continue;
+      s.timer -= dt;
+      if (s.timer > 0) continue;
+      const result = this.tryGrow(s);
+      if (result === "grown" || result === "gone") this.saplings.delete(k);
+      else if (++s.tries >= MAX_TRIES) this.saplings.delete(k);
+      else s.timer = this._delay(RETRY_MIN, RETRY_MAX);
+    }
+  }
+  /* Try to turn one sapling into a tree. Returns 'grown', 'blocked' (try again
+     later) or 'gone' (no longer a sapling, or nowhere it can grow). */
+  tryGrow(s) {
+    const world = this.game.world;
+    const kind = kindOfSapling(world.getBlock(s.x, s.y, s.z));
+    if (!kind) return "gone";
+    const below = world.getBlock(s.x, s.y - 1, s.z);
+    if (below !== ID.GRASS && below !== ID.DIRT) return "gone";
+    if (world.getSkyLight(s.x, s.y, s.z) < MIN_SKYLIGHT) return "blocked";
+    const seed = this.game.seed | 0;
+    const tree = treeBlocks(kind, new RNG(hashCombine(seed, s.x, s.y, s.z, 31337)).next, CHUNK_SY - 1 - s.y);
+    const open = (id) => id === ID.AIR || blocks_default.renderType(id) === "cross";
+    let leafTotal = 0, leafFree = 0;
+    for (const b of tree.blocks) {
+      const x = s.x + b.dx, y = s.y + b.dy, z = s.z + b.dz;
+      if (y < 0 || y >= CHUNK_SY) {
+        if (!b.leaf) return "blocked";
+        leafTotal++;
+        continue;
+      }
+      const cur = world.getBlock(x, y, z);
+      if (!b.leaf) {
+        if (!(open(cur) || cur === b.id)) return "blocked";
+      } else {
+        leafTotal++;
+        if (open(cur) || isLeafId(cur)) leafFree++;
+      }
+    }
+    if (leafTotal && leafFree / leafTotal < MIN_CANOPY_FREE) return "blocked";
+    for (const b of tree.blocks) {
+      if (b.leaf) continue;
+      world.setBlock(s.x + b.dx, s.y + b.dy, s.z + b.dz, b.id, { cause: "network" });
+    }
+    for (const b of tree.blocks) {
+      if (!b.leaf) continue;
+      const x = s.x + b.dx, y = s.y + b.dy, z = s.z + b.dz;
+      if (y < 0 || y >= CHUNK_SY) continue;
+      const cur = world.getBlock(x, y, z);
+      if (open(cur)) world.setBlock(x, y, z, b.id, { cause: "network" });
+    }
+    if (below === ID.GRASS) world.setBlock(s.x, s.y - 1, s.z, ID.DIRT, { cause: "network" });
+    const ev = this.game.events;
+    if (ev) ev.emit("tree:grown", { x: s.x, y: s.y, z: s.z, kind });
+    return "grown";
+  }
+  /* ---- persistence: only edits matter, and scanEdits() rebuilds timers ---- */
+};
+function isLeafId(id) {
+  return id === ID.LEAVES || id === ID.BIRCH_LEAVES || id === ID.PINE_LEAVES;
+}
 
 // js/fx/particles.js
 var MAX_PARTICLES = 2e3;
@@ -41479,6 +41798,7 @@ var BLOCK_TEXTURES = {
   pumpkin: { top: "pumpkin_top", side: "pumpkin_side", bottom: "pumpkin_top" },
   crafting_table: { top: "crafting_table_top", side: "crafting_table_side", bottom: "planks" },
   furnace: { top: "furnace_top", side: "furnace_side", bottom: "furnace_top" },
+  chest: { top: "chest_top", side: "chest_side", bottom: "chest_top" },
   furnace_lit: { top: "furnace_top", side: "furnace_lit_side", bottom: "furnace_top" },
   bricks: "bricks",
   mossy_cobble: "mossy_cobble",
@@ -41492,6 +41812,9 @@ var BLOCK_TEXTURES = {
   flower_yellow: "flower_yellow",
   tall_grass: "tall_grass",
   mushroom_red: "mushroom_red",
+  sapling_oak: "sapling_oak",
+  sapling_birch: "sapling_birch",
+  sapling_pine: "sapling_pine",
   torch: "torch",
   obsidian: "obsidian",
   emerald_ore: "emerald_ore",
@@ -41999,6 +42322,34 @@ var RECIPES = {
     }
     for (let x = 4; x < s - 4; x++) t.set(x, s - 3, 196, 108, 40);
   },
+  // Chest: planks with a darker frame; the side adds the lid seam and a latch.
+  chest_top: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * 0.8, p[1] * 0.76, p[2] * 0.72);
+    }
+    t.outline([66, 46, 26]);
+  },
+  chest_side: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * 0.86, p[1] * 0.82, p[2] * 0.78);
+    }
+    t.outline([66, 46, 26]);
+    const seam = s * 0.34 | 0;
+    for (let x = 1; x < s - 1; x++) {
+      t.set(x, seam, 58, 40, 22);
+      t.set(x, seam + 1, 112, 80, 46);
+    }
+    const cx = s / 2 | 0;
+    for (let y = seam - 1; y <= seam + 3; y++) for (let x = cx - 1; x <= cx; x++) t.set(x, y, 168, 168, 176);
+    t.set(cx - 1, seam + 2, 70, 70, 78);
+    t.set(cx, seam + 2, 70, 70, 78);
+  },
   // The burning furnace: same body, but the opening is full of fire.
   furnace_lit_side: (t) => {
     t.mottle(baseColor("cobblestone"), 0.09);
@@ -42014,6 +42365,9 @@ var RECIPES = {
       }
     }
   },
+  sapling_oak: (t) => makeSapling(t, [72, 144, 56], [96, 172, 70]),
+  sapling_birch: (t) => makeSapling(t, [124, 168, 92], [150, 190, 112]),
+  sapling_pine: (t) => makeSapling(t, [44, 100, 68], [62, 126, 86], true),
   flower_red: (t) => makeFlower(t, [198, 62, 58]),
   flower_yellow: (t) => makeFlower(t, [226, 200, 62]),
   mushroom_red: (t) => {
@@ -42087,6 +42441,30 @@ function makeLeaves(t, c) {
     const x = t.rand() * s | 0, y = t.rand() * s | 0;
     const p = t.get(x, y);
     if (p[3] > 0) t.set(x, y, p[0] * 0.72, p[1] * 0.72, p[2] * 0.72, p[3]);
+  }
+}
+function makeSapling(t, dark, light, conifer = false) {
+  t.fill(0, 0, 0, 0);
+  const s = t.size, cx = s / 2 | 0;
+  const trunk = [104, 78, 48];
+  for (let y = s * 0.62 | 0; y < s - 1; y++) t.set(cx, y, trunk[0], trunk[1], trunk[2]);
+  const leaf = (x, y, light1) => {
+    const c = light1 ? light : dark;
+    t.set(x, y, c[0], c[1], c[2]);
+  };
+  if (conifer) {
+    for (let tier = 0; tier < 4; tier++) {
+      const y = s * 0.18 + tier * 3, w = 1 + tier;
+      for (let x = cx - w; x <= cx + w; x++) leaf(x, y | 0, (x + tier) % 2 === 0);
+    }
+  } else {
+    for (let y = s * 0.22 | 0; y < s * 0.62 | 0; y++) {
+      for (let x = cx - 4; x <= cx + 3; x++) {
+        const dx = x - (cx - 0.5), dy = y - s * 0.42;
+        if (dx * dx + dy * dy * 1.6 > 14 + t.rand() * 3) continue;
+        leaf(x, y, t.rand() > 0.55);
+      }
+    }
   }
 }
 function makeFlower(t, petal) {
@@ -42239,6 +42617,9 @@ var PACK_ALIASES = {
   furnace_top: ["furnace_top"],
   furnace_side: ["furnace_front", "furnace_side"],
   furnace_lit_side: ["furnace_front_on"],
+  sapling_oak: ["oak_sapling", "sapling_oak"],
+  sapling_birch: ["birch_sapling", "sapling_birch"],
+  sapling_pine: ["spruce_sapling", "sapling_spruce"],
   bricks: ["bricks", "brick"],
   mossy_cobble: ["mossy_cobblestone", "cobblestone_mossy"],
   clay: ["clay"],
@@ -43432,6 +43813,7 @@ var Sky = class {
     this._sunLight = [1, 1, 1];
     this._sunOnly = [1, 1, 1];
     this._horizonLin = [0.4, 0.6, 1];
+    this._underwater = 0;
     this._zenithLin = [0.1, 0.3, 0.8];
     this._elapsed = 0;
     this._initialized = false;
@@ -43734,7 +44116,7 @@ var Sky = class {
     this._recolorDome(SAMPLE);
     this._orbitBodies(t, SAMPLE);
     this._updateLights(SAMPLE, t);
-    this._updateFog(SAMPLE);
+    this._updateFog(SAMPLE, dt);
     this._updateStars(t);
     this._updateClouds(dt, cam);
   }
@@ -43758,6 +44140,22 @@ var Sky = class {
     out.sunI = lerp2(a.sunI, b.sunI, f);
     out.hemiI = lerp2(a.hemiI, b.hemiI, f);
     out.light = lerp2(a.light, b.light, f);
+    const weather = this.game && this.game.weather;
+    const wet = weather ? weather.intensity : 0;
+    if (wet > 1e-3) {
+      const k = Math.min(1, wet) * 0.75;
+      for (const c of [out.top, out.horizon]) {
+        const l = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+        c[0] = lerp2(c[0], l * 0.86, k);
+        c[1] = lerp2(c[1], l * 0.9, k);
+        c[2] = lerp2(c[2], l * 0.98, k);
+      }
+      const sunGrey = 0.62 * (0.3 * out.sun[0] + 0.59 * out.sun[1] + 0.11 * out.sun[2]);
+      for (let i = 0; i < 3; i++) out.sun[i] = lerp2(out.sun[i], sunGrey * (i === 2 ? 1.08 : 1), wet * 0.6);
+      out.sunI *= 1 - 0.55 * wet;
+      out.hemiI *= 1 - 0.15 * wet;
+      out.light *= 1 - 0.2 * wet;
+    }
     return out;
   }
   _recolorDome(p) {
@@ -43841,11 +44239,21 @@ var Sky = class {
       this.moon.intensity = Math.PI * ENTITY_GAIN * this._brightness() * night * clamp01(smoothstep2(-0.05, 0.12, my));
     }
   }
-  _updateFog(p) {
+  _updateFog(p, dt) {
     const engine = this._engine();
     const scene = this._scene();
     if (engine && typeof engine.setFogColor === "function") {
-      _tmpColor.setRGB(p.horizon[0], p.horizon[1], p.horizon[2]);
+      const player = this.game && this.game.player;
+      const under = player && player.eyesUnderWater ? 1 : 0;
+      this._underwater += (under - this._underwater) * Math.min(1, (dt > 0 ? dt : 0.016) * 9);
+      if (this._underwater < 2e-3) this._underwater = 0;
+      const uw = this._underwater;
+      const lum = 0.22 + 0.78 * clamp01(p.light);
+      _tmpColor.setRGB(
+        lerp2(p.horizon[0], 0.06 * lum + 0.01, uw),
+        lerp2(p.horizon[1], 0.3 * lum + 0.02, uw),
+        lerp2(p.horizon[2], 0.46 * lum + 0.04, uw)
+      );
       engine.setFogColor(_tmpColor);
       if (typeof engine.setFogRange === "function") {
         const st = this.game && this.game.state && this.game.state.settings;
@@ -43857,6 +44265,8 @@ var Sky = class {
         const wet = weather ? weather.intensity : 0;
         near *= 1 - 0.35 * wet;
         far *= 1 - 0.45 * wet;
+        near = lerp2(near, 0.4, uw);
+        far = lerp2(far, 10 + 24 * clamp01(p.light), uw);
         engine.setFogRange(near, far);
       }
     } else if (scene) {
@@ -43887,7 +44297,9 @@ var Sky = class {
       const k = lerp2(0.16, 1, clamp01(lvl * 1.15));
       const warm = SAMPLE.sun;
       this.cloudMat.color.setRGB(k * lerp2(0.8, warm[0], 0.65), k * lerp2(0.84, warm[1], 0.65), k * lerp2(0.95, warm[2], 0.65));
-      this.cloudMat.opacity = lerp2(0.35, 0.86, clamp01(lvl * 1.5));
+      const wet = this.game && this.game.weather ? this.game.weather.intensity : 0;
+      this.cloudMat.color.multiplyScalar(1 - 0.38 * wet);
+      this.cloudMat.opacity = lerp2(lerp2(0.35, 0.86, clamp01(lvl * 1.5)), 0.97, wet);
       this.cloudMat.visible = true;
     }
   }
@@ -44809,6 +45221,7 @@ var Menus = class {
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
     this.furnacePos = null;
+    this.chestPos = null;
     this._furnaceSig = "";
     this._invEls = null;
     this._onMouseMove = (e) => this._handlePointer(e);
@@ -44852,6 +45265,7 @@ var Menus = class {
   // event-driven, so this is a no-op but kept for the contract & future use).
   update(dt) {
     if (this.invOpen && this.furnacePos) this._updateFurnacePanel();
+    if (this.invOpen && this.chestPos) this._checkChestStillThere();
   }
   /* =====================================================================
      Small DOM helpers
@@ -45466,7 +45880,13 @@ var Menus = class {
     if (this.game && this.game.furnaces) this.game.furnaces.ensure(x, y, z);
     this._openInventory(false, { x, y, z });
   }
-  _openInventory(forceCraftingTable, furnace) {
+  // Open the storage screen for the chest at (x, y, z).
+  openChest(x, y, z) {
+    if (this.invOpen) return;
+    if (this.game && this.game.chests) this.game.chests.ensure(x, y, z);
+    this._openInventory(false, null, { x, y, z });
+  }
+  _openInventory(forceCraftingTable, furnace, chest) {
     if (!this.layer) return;
     const g = this.game;
     if (g && g.input && typeof g.input.exitLock === "function") g.input.exitLock();
@@ -45475,6 +45895,7 @@ var Menus = class {
     this.current = "inventory";
     this.craftingTable = !!forceCraftingTable;
     this.furnacePos = furnace || null;
+    this.chestPos = chest || null;
     this._furnaceSig = "";
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
@@ -45491,6 +45912,7 @@ var Menus = class {
     this.invOpen = false;
     this.current = null;
     this.furnacePos = null;
+    this.chestPos = null;
     this._hideTooltip();
     this._hideGhost();
     this._closeInventoryDom();
@@ -45523,7 +45945,7 @@ var Menus = class {
     const panel = this._make("div", { class: "menu-panel" });
     const titleRow = this._make("div", { class: "row between" });
     titleRow.appendChild(this._make("h1", {
-      text: this.furnacePos ? "Furnace" : this.craftingTable ? "Crafting Table" : "Inventory",
+      text: this.furnacePos ? "Furnace" : this.chestPos ? "Chest" : this.craftingTable ? "Crafting Table" : "Inventory",
       style: "font-size:24px;"
     }));
     titleRow.appendChild(this._button("Close", {
@@ -45533,8 +45955,11 @@ var Menus = class {
     }));
     panel.appendChild(titleRow);
     let craftSlots = [], outSlot = null, recipeSlots = [], furnaceEls = null;
+    let chestSlots = [];
     if (this.furnacePos) {
       furnaceEls = this._buildFurnaceArea(panel);
+    } else if (this.chestPos) {
+      chestSlots = this._buildChestArea(panel);
     } else {
       panel.appendChild(this._make("div", { class: "section-title", text: "CRAFTING" }));
       const craftArea = this._make("div", { class: "craft-area" });
@@ -45626,7 +46051,8 @@ var Menus = class {
       mainSlots,
       hotSlots,
       recipeSlots,
-      furnaceEls
+      furnaceEls,
+      chestSlots
     };
   }
   // Build the recipe-book entries; returns [{recipe, el}] for refresh.
@@ -45699,6 +46125,10 @@ var Menus = class {
       const key = this.craftGrid[idx];
       this._drawStack(el, key ? { id: key, count: 1 } : null);
     }
+    if (this._invEls.chestSlots && this._invEls.chestSlots.length) {
+      const st = this._chestState();
+      for (const { slot, el } of this._invEls.chestSlots) this._drawStack(el, st ? st.slots[slot] : null);
+    }
     if (this._invEls.furnaceEls) this._furnaceSig = "";
     if (this._invEls.furnaceEls) this._updateFurnacePanel();
     if (this._invEls.outSlot) {
@@ -45718,6 +46148,64 @@ var Menus = class {
     const crafting = this.game && this.game.crafting;
     if (!crafting || typeof crafting.match !== "function") return null;
     return crafting.match(this.craftGrid.slice());
+  }
+  /* ---- the chest screen ------------------------------------------------- */
+  _chestState() {
+    const c = this.game && this.game.chests, p = this.chestPos;
+    return c && p ? c.ensure(p.x, p.y, p.z) : null;
+  }
+  // Three rows of nine slots above the inventory. Returns [{slot, el}].
+  _buildChestArea(panel) {
+    panel.appendChild(this._make("div", { class: "section-title", text: "CHEST" }));
+    const grid = this._make("div", { class: "inv-grid main" });
+    const out = [];
+    for (let i = 0; i < CHEST_SLOTS; i++) {
+      const slot = this._makeSlot();
+      slot.dataset.kind = "chest";
+      slot.dataset.slot = String(i);
+      slot.addEventListener("click", (e) => this._onChestSlotClick(i, e));
+      slot.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this._onChestSlotClick(i, e);
+      });
+      slot.addEventListener("mouseenter", () => {
+        const st = this._chestState();
+        const s = st ? st.slots[i] : null;
+        this._showTooltipFor(s ? s.id : null);
+      });
+      slot.addEventListener("mouseleave", () => this._hideTooltip());
+      out.push({ slot: i, el: slot });
+      grid.appendChild(slot);
+    }
+    panel.appendChild(grid);
+    return out;
+  }
+  _onChestSlotClick(i, e) {
+    const st = this._chestState();
+    if (!st) return;
+    if (e && e.shiftKey && st.slots[i]) {
+      const inv = this.game && this.game.inventory;
+      if (inv) {
+        const left = inv.addStack(st.slots[i]);
+        st.slots[i] = left > 0 ? cloneStack(st.slots[i], left) : null;
+        this._afterSlotMutation();
+        return;
+      }
+    }
+    this._clickStackSlot(st.slots, i, e);
+  }
+  _quickMoveToChest(slotIndex) {
+    const inv = this.game && this.game.inventory, st = this._chestState();
+    const here = inv && inv.slots[slotIndex];
+    if (!st || !here) return;
+    const left = moveInto(st.slots, here);
+    inv.slots[slotIndex] = left > 0 ? cloneStack(here, left) : null;
+    this._afterSlotMutation();
+  }
+  // The block can vanish under an open screen (broken by someone else).
+  _checkChestStillThere() {
+    const g = this.game, p = this.chestPos;
+    if (g && g.world && p && g.world.getBlock(p.x, p.y, p.z) !== ID.CHEST) this._closeInventory();
   }
   /* ---- the furnace screen ---------------------------------------------- */
   // Build the smelting row: [ore] -> [output], with the fuel slot and flame
@@ -45855,7 +46343,14 @@ var Menus = class {
   _onInvSlotClick(slotIndex, e) {
     const inv = this.game && this.game.inventory;
     if (!inv || !inv.slots) return;
-    const slots = inv.slots;
+    if (e && e.shiftKey && this.chestPos) {
+      this._quickMoveToChest(slotIndex);
+      return;
+    }
+    this._clickStackSlot(inv.slots, slotIndex, e);
+  }
+  // The cursor-stack interaction for any array of slots (inventory or chest).
+  _clickStackSlot(slots, slotIndex, e) {
     const cur = this.cursor;
     const here = slots[slotIndex] || null;
     if (!cur) {
@@ -46363,7 +46858,9 @@ var LOADING_TIPS = [
   "Tip: Press E to open your inventory and craft.",
   "Tip: Build a Crafting Table for the 3\xD73 grid.",
   "Tip: Smelt ore in a Furnace \u2014 right-click it, add fuel and ore.",
+  "Tip: Craft a Chest from eight planks to store your things.",
   "Tip: Tools wear out; the bar under the icon shows what is left.",
+  "Tip: Break leaves to find saplings, then plant them on grass to grow a tree.",
   "Tip: Torches keep the monsters away at night.",
   "Tip: Press F to toggle creative flight.",
   "Tip: Diamonds hide deep underground.",
@@ -46409,6 +46906,8 @@ async function boot() {
     inventory: null,
     crafting: null,
     furnaces: null,
+    chests: null,
+    growth: null,
     particles: null,
     audio: null,
     sky: null,
@@ -46436,6 +46935,8 @@ async function boot() {
   game.inventory = new Inventory(game);
   game.crafting = new Crafting(game);
   game.furnaces = new Furnaces(game);
+  game.chests = new Chests(game);
+  game.growth = new Growth(game);
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
   game.sky = new Sky(game);
@@ -46455,6 +46956,8 @@ async function boot() {
     "inventory",
     "crafting",
     "furnaces",
+    "chests",
+    "growth",
     "particles",
     "audio",
     "sky",
@@ -46570,11 +47073,15 @@ async function boot() {
     game.worldgen.setSeed ? game.worldgen.setSeed(game.seed) : game.worldgen.seed = game.seed;
     game.world.reset(game.seed);
     game.furnaces.reset();
+    game.chests.reset();
+    game.growth.reset();
     game.entities.removeAll();
     game.particles.reset && game.particles.reset();
     if (save) {
       game.world.applyEdits(save.edits || []);
       game.furnaces.load(save.furnaces);
+      game.chests.load(save.chests);
+      game.growth.scanEdits();
       game.inventory.load(save.inventory);
       game.player.load(save.player);
       game.sky.load(save.sky);
@@ -46651,6 +47158,7 @@ async function boot() {
       seed: game.seed,
       edits: game.world.serialize().edits,
       furnaces: game.furnaces.serialize(),
+      chests: game.chests.serialize(),
       inventory: game.inventory.serialize(),
       player: game.player.serialize(),
       sky: game.sky.serialize(),
@@ -46679,6 +47187,7 @@ async function boot() {
           game.player.update(dt);
           game.entities.update(dt);
           game.furnaces.update(dt);
+          game.growth.update(dt);
         }
         game.world.update(dt, anchor);
         game.particles.update(dt);
