@@ -1,7 +1,7 @@
 /* Grab a gameplay screenshot for eyeballing visual changes.
    Usage: node tests/shot.mjs [outfile] [timeOfDay] [spec-json]
    spec: { biome: 'desert'|'jungle'|..., seed, view: 'vista'|'ground'|'tree'|'water'|'underwater', yaw, pitch, dist, log: 'pine'|'birch',
-           give: [item ids], hold: hotbar index, mobs: ['pig', ...], torches: [[right,forward],...], blocks: [[right,forward,'chest'],...], weather: 'rain' }
+           give: [item ids], hold: hotbar index, mobs: ['pig', ...], torches: [[right,forward],...], blocks: [[right,forward,'chest'],...], weather: 'rain', wait: ms }
    'vista'  hover above the spawn and look down over the terrain (default)
    'ground' stand on the surface at spawn, looking at the horizon
    'tree'   stand a few blocks from the nearest log, looking at its crown
@@ -158,7 +158,7 @@ try {
     return note;
   }, { tod: TOD, spec: SPEC });
   if (info) console.log(info);
-  await sleep((SPEC.biome || SPEC.climate) ? 9000 : 4500);
+  await sleep(SPEC.wait ?? ((SPEC.biome || SPEC.climate) ? 9000 : 4500));
   await page.screenshot({ path: OUT });
   console.log('wrote', OUT);
 } finally {

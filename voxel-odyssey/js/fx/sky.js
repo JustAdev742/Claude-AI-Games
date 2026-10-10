@@ -500,6 +500,26 @@ export class Sky {
     out.sunI = lerp(a.sunI, b.sunI, f);
     out.hemiI = lerp(a.hemiI, b.hemiI, f);
     out.light = lerp(a.light, b.light, f);
+
+    // Overcast: rain pulls colour out of the sky, dims and cools the sun, and
+    // takes a little off the light level. Driven by the weather system's eased
+    // intensity, so a shower greys the world over seconds, not in one frame.
+    const weather = this.game && this.game.weather;
+    const wet = weather ? weather.intensity : 0;
+    if (wet > 0.001) {
+      const k = Math.min(1, wet) * 0.75;
+      for (const c of [out.top, out.horizon]) {
+        const l = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+        c[0] = lerp(c[0], l * 0.86, k);
+        c[1] = lerp(c[1], l * 0.9, k);
+        c[2] = lerp(c[2], l * 0.98, k);
+      }
+      const sunGrey = 0.62 * (0.3 * out.sun[0] + 0.59 * out.sun[1] + 0.11 * out.sun[2]);
+      for (let i = 0; i < 3; i++) out.sun[i] = lerp(out.sun[i], sunGrey * (i === 2 ? 1.08 : 1), wet * 0.6);
+      out.sunI *= 1 - 0.55 * wet;
+      out.hemiI *= 1 - 0.15 * wet;
+      out.light *= 1 - 0.2 * wet;
+    }
     return out;
   }
 
@@ -700,7 +720,9 @@ export class Sky {
       const k = lerp(0.16, 1.0, clamp01(lvl * 1.15));
       const warm = SAMPLE.sun;
       this.cloudMat.color.setRGB(k * lerp(0.80, warm[0], 0.65), k * lerp(0.84, warm[1], 0.65), k * lerp(0.95, warm[2], 0.65));
-      this.cloudMat.opacity = lerp(0.35, 0.86, clamp01(lvl * 1.5));
+      const wet = this.game && this.game.weather ? this.game.weather.intensity : 0;
+      this.cloudMat.color.multiplyScalar(1 - 0.38 * wet);          // heavy, grey cloud
+      this.cloudMat.opacity = lerp(lerp(0.35, 0.86, clamp01(lvl * 1.5)), 0.97, wet);
       this.cloudMat.visible = true;
     }
   }
