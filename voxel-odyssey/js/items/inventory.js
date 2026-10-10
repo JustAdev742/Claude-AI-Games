@@ -10,7 +10,7 @@
      9..35  main     (the 27 storage slots shown in the inventory screen)
 
    A slot is either `null` (empty) or a small "item stack" object:
-     { id: <itemKey:string>, count: <int >= 1> }
+     { id: <itemKey:string>, count: <int >= 1>, wear?: <uses spent, tools only> }
 
    Mutations always emit 'inventory:change' so the UI can refresh. Hotbar
    selection changes emit 'hotbar:select' { index, item }.
@@ -21,6 +21,15 @@ import { clamp } from '../core/utils.js';
 
 const HOTBAR_SLOTS = 9;     // slots 0..8
 const TOTAL_SLOTS = 36;     // slots 0..35
+
+// Copy a stack, keeping every field (notably tool `wear`), optionally with a
+// different count. Moving a stack between slots must never lose its wear.
+export function cloneStack(s, count) {
+  if (!s) return null;
+  const c = { id: s.id, count: count === undefined ? s.count : count };
+  if (s.wear) c.wear = s.wear;
+  return c;
+}
 
 export class Inventory {
   constructor(game) {
@@ -146,6 +155,22 @@ export class Inventory {
     return remaining;
   }
 
+  // Add a whole stack, preserving its tool wear. Worn tools (stack size 1)
+  // cannot merge, so they go to the first empty slot; everything else takes the
+  // ordinary add() path. Returns the number that did not fit.
+  addStack(stack) {
+    if (!stack || !stack.id || !(stack.count > 0)) return 0;
+    if (!stack.wear) return this.add(stack.id, stack.count);
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      if (this.slots[i] == null) {
+        this.slots[i] = cloneStack(stack);
+        this._emitChange();
+        return 0;
+      }
+    }
+    return stack.count;
+  }
+
   // How many of `itemKey` would fit right now (without mutating). Used to guard
   // operations that must not silently destroy items (e.g. crafting output).
   spaceFor(itemKey, count = 1) {
@@ -176,6 +201,25 @@ export class Inventory {
     if (s.count <= 0) this.slots[slot] = null;
     this._emitChange();
     return removed;
+  }
+
+  // Spend `uses` of the held tool's durability. When it is used up the tool
+  // breaks: the slot empties and 'tool:break' fires. Returns true if it broke.
+  // (Callers skip this in creative mode.)
+  wearSelected(uses = 1) {
+    const s = this.slots[this.selected];
+    const max = s ? Items.durability(s.id) : 0;
+    if (!s || max <= 0 || !(uses > 0)) return false;
+    s.wear = (s.wear || 0) + uses;
+    if (s.wear >= max) {
+      this.slots[this.selected] = null;
+      const ev = this._events();
+      if (ev) ev.emit('tool:break', { id: s.id });
+      this._emitChange();
+      return true;
+    }
+    this._emitChange();
+    return false;
   }
 
   // Remove up to `count` from the currently selected hotbar slot.
@@ -274,7 +318,7 @@ export class Inventory {
     if (!this._valid(slot) || !stack || !stack.id || stack.count <= 0) return stack || null;
     const existing = this.slots[slot];
     if (!existing) {
-      this.slots[slot] = { id: stack.id, count: Math.floor(stack.count) };
+      this.slots[slot] = cloneStack(stack, Math.floor(stack.count));
       this._emitChange();
       return null;
     }
@@ -288,7 +332,7 @@ export class Inventory {
       return leftover > 0 ? { id: stack.id, count: leftover } : null;
     }
     // Different item: swap — return the displaced stack to the caller's cursor.
-    this.slots[slot] = { id: stack.id, count: Math.floor(stack.count) };
+    this.slots[slot] = cloneStack(stack, Math.floor(stack.count));
     this._emitChange();
     return existing;
   }
@@ -334,7 +378,7 @@ export class Inventory {
   serialize() {
     return {
       selected: this.selected,
-      slots: this.slots.map((s) => (s ? { id: s.id, count: s.count } : null)),
+      slots: this.slots.map((s) => cloneStack(s)),
     };
   }
 
@@ -348,6 +392,8 @@ export class Inventory {
         // Drop entries whose item key no longer exists in the registry.
         if (Items && typeof Items.has === 'function' && !Items.has(s.id)) continue;
         next[i] = { id: s.id, count: Math.max(1, Math.floor(s.count)) };
+        const max = Items.durability(s.id);
+        if (max > 0 && Number.isFinite(s.wear) && s.wear > 0) next[i].wear = Math.min(max - 1, Math.floor(s.wear));
       }
     }
     this.slots = next;

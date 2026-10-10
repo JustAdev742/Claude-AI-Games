@@ -406,6 +406,23 @@ const RECIPES = {
     for (let x = 4; x < s - 4; x++) t.set(x, s - 3, 196, 108, 40);
   },
 
+  // The burning furnace: same body, but the opening is full of fire.
+  furnace_lit_side: (t) => {
+    t.mottle(baseColor('cobblestone'), 0.09);
+    const s = t.size;
+    for (let y = (s * 0.35) | 0; y < s - 2; y++) {
+      for (let x = 3; x < s - 3; x++) t.set(x, y, 58, 26, 14);
+    }
+    // Flames: hot yellow at the base fading to orange-red at the tips.
+    for (let x = 4; x < s - 4; x++) {
+      const h = 3 + ((t.rand() * 5) | 0);
+      for (let k = 0; k < h; k++) {
+        const y = s - 3 - k, f = k / h;
+        t.set(x, y, 255, 214 - f * 120, 70 - f * 40);
+      }
+    }
+  },
+
   flower_red: (t) => makeFlower(t, [198, 62, 58]),
   flower_yellow: (t) => makeFlower(t, [226, 200, 62]),
   mushroom_red: (t) => {

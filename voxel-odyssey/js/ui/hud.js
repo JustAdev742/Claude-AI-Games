@@ -143,10 +143,13 @@ export class HUD {
 
       const key = this._el('span', { cls: 'key', text: String(i + 1), parent: slotEl });
       const count = this._el('span', { cls: 'count', parent: slotEl });
+      const dur = this._el('div', { cls: 'dur', parent: slotEl });
+      const durFill = document.createElement('i');
+      dur.appendChild(durFill);
 
       this.slots.push({
-        el: slotEl, canvas, ctx, key, count,
-        lastId: undefined, lastCount: -1, selected: false,
+        el: slotEl, canvas, ctx, key, count, dur, durFill,
+        lastId: undefined, lastCount: -1, lastWear: -1, selected: false,
       });
     }
   }
@@ -296,6 +299,18 @@ export class HUD {
       if (cnt !== slot.lastCount) {
         slot.count.textContent = cnt > 1 ? String(cnt) : '';
         slot.lastCount = cnt;
+      }
+      // Durability bar under a worn tool.
+      const wear = stack && stack.wear ? stack.wear : 0;
+      if (wear !== slot.lastWear) {
+        slot.lastWear = wear;
+        const f = Items.wearFraction(stack);
+        if (f === null) slot.dur.style.display = 'none';
+        else {
+          slot.dur.style.display = 'block';
+          slot.durFill.style.width = (f * 100).toFixed(0) + '%';
+          slot.durFill.style.background = `hsl(${(f * 120).toFixed(0)}, 80%, 50%)`;
+        }
       }
     }
     this._refreshSelectedFromInventory();

@@ -311,5 +311,33 @@ const DECOR = new Set([ID.LOG, ID.BIRCH_LOG, ID.PINE_LOG, ID.LEAVES, ID.BIRCH_LE
   ok('surface: several biomes present', seen.size >= 4, [...seen].join(','));
 }
 
+/* ---- landmass scale and spawn quality ----------------------------------
+   Players should start on a real stretch of land, and the world should be
+   mostly continents rather than a scatter of sandbars. */
+{
+  const seeds = [1, 42, 1337, 2024, 77777];
+  let landSum = 0;
+  for (const sd of seeds) {
+    const wg = mkGen(sd);
+    let land = 0, tot = 0;
+    for (let x = -500; x <= 500; x += 20) for (let z = -500; z <= 500; z += 20) {
+      tot++;
+      if (wg.heightAt(x, z) >= WATER_LEVEL) land++;
+    }
+    landSum += land / tot;
+
+    const spot = wg.findSpawnSpot(0, 0);
+    ok(`spawn[${sd}]: a spot is found`, !!spot);
+    if (spot) {
+      ok(`spawn[${sd}]: surrounded by dry, gentle land`, wg.spawnScore(spot.x, spot.z) >= 0.99,
+        `score ${wg.spawnScore(spot.x, spot.z).toFixed(2)}`);
+      ok(`spawn[${sd}]: not in water`, wg.heightAt(spot.x, spot.z) > WATER_LEVEL + 1);
+    }
+  }
+  const mean = landSum / seeds.length;
+  ok('continents: land is roughly half or more of the surface', mean > 0.47 && mean < 0.75,
+    `${(100 * mean).toFixed(1)}%`);
+}
+
 console.log(`\n==== worldgen: ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);

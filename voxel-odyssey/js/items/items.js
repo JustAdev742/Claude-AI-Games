@@ -3,6 +3,8 @@
 
    An ItemStack stored in the inventory is the small shape: { id, count }
    where `id` is an item key string (e.g. 'cobblestone', 'iron_pickaxe').
+   Tools additionally carry `wear` — the uses spent so far — once they have
+   been used; a fresh tool has no `wear` field at all.
 
    Item definition fields:
      key        unique string id
@@ -134,6 +136,15 @@ export const Items = {
   blockId(key) { const d = REG.get(key); return d ? d.blockId : undefined; },
   name(key) { const d = REG.get(key); return d ? d.name : key; },
   attack(key) { const d = REG.get(key); return d ? d.attack : 1; },
+  // Uses a tool survives; 0 for anything that does not wear out.
+  durability(key) { const d = REG.get(key); return d && d.tool ? d.tool.durability | 0 : 0; },
+  // Fraction of a tool stack's life remaining (1 = new), or null when the
+  // stack is not a worn tool and so needs no durability bar.
+  wearFraction(stack) {
+    if (!stack || !stack.wear) return null;
+    const max = Items.durability(stack.id);
+    return max > 0 ? Math.max(0, Math.min(1, 1 - stack.wear / max)) : null;
+  },
 
   // The drop produced by mining a block, as an item key (or null).
   dropFor(blockId) {

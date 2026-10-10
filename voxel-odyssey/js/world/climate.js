@@ -48,6 +48,8 @@
 import { Noise } from './noise.js';
 import { clamp } from '../core/utils.js';
 
+const CONTINENT_BIAS = 0.12;
+
 /* -------------------------------------------------------------------------
    Spline — piecewise-linear mapping with smooth (smoothstep) segments.
 
@@ -176,7 +178,12 @@ export class Climate {
   // landmasses on the order of a thousand blocks, which is what makes biomes
   // feel large; the old generator's 0.0028 produced features every ~250
   // blocks, so you crossed three biomes on a short walk.
-  continentalness(x, z) { return this.nContinent.fbm2(x, z, 4, 0.0009, 2.0, 0.5); }
+  continentalness(x, z) {
+    // CONTINENT_BIAS lifts the whole field a little so land is the majority
+    // (~54% of the surface) and landmasses are broad rather than a scatter of
+    // islands; the cap keeps spline/biome lookups inside their [-1, 1] domain.
+    return Math.min(1, this.nContinent.fbm2(x, z, 4, 0.0007, 2.0, 0.5) + CONTINENT_BIAS);
+  }
   erosion(x, z) { return this.nErosion.fbm2(x, z, 4, 0.0016, 2.0, 0.5); }
   weirdness(x, z) { return this.nWeird.fbm2(x, z, 4, 0.0035, 2.0, 0.5); }
   temperature(x, z) { return this.nTemp.fbm2(x, z, 3, 0.0011, 2.0, 0.5); }

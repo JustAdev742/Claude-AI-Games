@@ -63,6 +63,7 @@ export const BLOCK_TEXTURES = {
   pumpkin: { top: 'pumpkin_top', side: 'pumpkin_side', bottom: 'pumpkin_top' },
   crafting_table: { top: 'crafting_table_top', side: 'crafting_table_side', bottom: 'planks' },
   furnace: { top: 'furnace_top', side: 'furnace_side', bottom: 'furnace_top' },
+  furnace_lit: { top: 'furnace_top', side: 'furnace_lit_side', bottom: 'furnace_top' },
   bricks: 'bricks',
   mossy_cobble: 'mossy_cobble',
   clay: 'clay',

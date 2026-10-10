@@ -122,6 +122,7 @@ export const ID = {
   REDSTONE_ORE: 39,
   LANTERN: 40,
   LAVA: 41,
+  FURNACE_LIT: 42,   // the furnace while it is burning (placed/removed by the furnace system)
 };
 Object.freeze(ID);
 
@@ -242,6 +243,10 @@ register(ID.CRAFTING_TABLE, 'crafting_table', {
 register(ID.FURNACE, 'furnace', {
   name: 'Furnace', color: rgb(96, 96, 100), top: rgb(80, 80, 84),
   hardness: 2.6, tool: 'pickaxe', walkSound: 'stone',
+});
+register(ID.FURNACE_LIT, 'furnace_lit', {
+  name: 'Furnace', color: rgb(96, 96, 100), top: rgb(80, 80, 84),
+  light: 13, hardness: 2.6, tool: 'pickaxe', drop: 'furnace', walkSound: 'stone',
 });
 register(ID.BRICKS, 'bricks', {
   name: 'Bricks', color: rgb(150, 78, 64), hardness: 2.4, tool: 'pickaxe', walkSound: 'stone',

@@ -853,11 +853,30 @@ export class Player {
 
     if (this.game.state) this.game.state.addStat('blocksMined', 1);
 
+    // Digging wears the held tool (never in creative, which breaks with drop
+    // false). Soft blocks like flowers cost nothing.
+    if (drop && (Blocks.get(blockId) || {}).hardness > 0) this._wearHeldTool(1);
+
     if (drop) {
       const dropKey = Items.dropFor(blockId);
       if (dropKey && this.game.entities && typeof this.game.entities.dropItem === 'function') {
         try { this.game.entities.dropItem(x + 0.5, y + 0.5, z + 0.5, dropKey, 1); } catch (_) {}
       }
+    }
+  }
+
+  // Spend durability on the held tool; announce it if it breaks.
+  _wearHeldTool(uses) {
+    const inv = this.game.inventory;
+    if (!inv || typeof inv.wearSelected !== 'function' || this.isCreative) return;
+    const held = inv.selectedItem();
+    if (!held || !Items.durability(held.id)) return;
+    const name = Items.name(held.id);
+    if (inv.wearSelected(uses)) {
+      this.game.toast(`Your ${name} broke!`, 'warn');
+      this._emitSfx('break', { surface: 'wood' });
+      this._miningKey = null;
+      this.mineProgress = 0;
     }
   }
 
@@ -871,6 +890,11 @@ export class Player {
     if (!result || !result.entity) return false;
 
     const dmg = Items.attack(heldKey);
+    // Swords are made for this; using a pickaxe or shovel as a weapon wears it twice as fast.
+    if (!this.isCreative) {
+      const tool = Items.get(heldKey) && Items.get(heldKey).tool;
+      if (tool) this._wearHeldTool(tool.type === 'sword' ? 1 : 2);
+    }
     this._attackTimer = ATTACK_COOLDOWN;
     this._swing = 1;
     try {
@@ -885,11 +909,18 @@ export class Player {
   _handleUse(hit, held, heldKey) {
     const inv = this.game.inventory;
 
-    // 1) Crafting table under the crosshair → open the 3×3 grid.
+    // 1) Crafting table under the crosshair → open the 3×3 grid; a furnace →
+    //    open its smelting screen.
     if (hit && this.game.world) {
       if (hit.blockId === ID.CRAFTING_TABLE) {
         if (this.game.menus && typeof this.game.menus.toggleInventory === 'function') {
           this.game.menus.toggleInventory(true);
+          return;
+        }
+      }
+      if (hit.blockId === ID.FURNACE || hit.blockId === ID.FURNACE_LIT) {
+        if (this.game.menus && typeof this.game.menus.openFurnace === 'function') {
+          this.game.menus.openFurnace(hit.block.x, hit.block.y, hit.block.z);
           return;
         }
       }

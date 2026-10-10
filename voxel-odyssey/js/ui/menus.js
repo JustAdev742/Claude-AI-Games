@@ -30,6 +30,9 @@
    ========================================================================= */
 
 import Items from '../items/items.js';
+import { cloneStack } from '../items/inventory.js';
+import { smeltRecipe, fuelTime } from '../items/furnace.js';
+import { ID } from '../world/blocks.js';
 import { DEFAULT_SETTINGS } from '../core/state.js';
 import { clamp } from '../core/utils.js';
 
@@ -59,6 +62,8 @@ export class Menus {
     this.craftingTable = false;          // 3×3 grid when true, else 2×2
     this.craftGrid = new Array(9).fill(null);   // item keys | null (row-major)
     this.cursor = null;                  // stack held "on the cursor": {id,count}|null
+    this.furnacePos = null;              // {x,y,z} while the smelting screen is open
+    this._furnaceSig = '';               // cheap change detector for the live furnace panel
 
     // Cached references to live DOM we refresh frequently (inventory only).
     this._invEls = null;
@@ -109,7 +114,11 @@ export class Menus {
 
   // Optional per-frame hook (tooltip following, cursor ghost positioning are
   // event-driven, so this is a no-op but kept for the contract & future use).
-  update(dt) { /* intentionally empty; UI is event-driven */ }
+  update(dt) {
+    // Everything is event-driven except the furnace screen, whose flame and
+    // progress arrow tick every frame while it is open.
+    if (this.invOpen && this.furnacePos) this._updateFurnacePanel();
+  }
 
   /* =====================================================================
      Small DOM helpers
@@ -798,7 +807,14 @@ export class Menus {
     }
   }
 
-  _openInventory(forceCraftingTable) {
+  // Open the smelting screen for the furnace at (x, y, z).
+  openFurnace(x, y, z) {
+    if (this.invOpen) return;
+    if (this.game && this.game.furnaces) this.game.furnaces.ensure(x, y, z);
+    this._openInventory(false, { x, y, z });
+  }
+
+  _openInventory(forceCraftingTable, furnace) {
     if (!this.layer) return;
 
     // Opening the inventory counts as opening a menu: release the mouse.
@@ -811,6 +827,8 @@ export class Menus {
     this.invOpen = true;
     this.current = 'inventory';
     this.craftingTable = !!forceCraftingTable;
+    this.furnacePos = furnace || null;
+    this._furnaceSig = '';
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
 
@@ -834,6 +852,7 @@ export class Menus {
 
     this.invOpen = false;
     this.current = null;
+    this.furnacePos = null;
     this._hideTooltip();
     this._hideGhost();
 
@@ -878,7 +897,7 @@ export class Menus {
     // Title + close button row.
     const titleRow = this._make('div', { class: 'row between' });
     titleRow.appendChild(this._make('h1', {
-      text: this.craftingTable ? 'Crafting Table' : 'Inventory',
+      text: this.furnacePos ? 'Furnace' : this.craftingTable ? 'Crafting Table' : 'Inventory',
       style: 'font-size:24px;',
     }));
     titleRow.appendChild(this._button('Close', {
@@ -886,51 +905,56 @@ export class Menus {
     }));
     panel.appendChild(titleRow);
 
-    // ---- Crafting area: grid + arrow + output, beside the recipe book ----
-    panel.appendChild(this._make('div', { class: 'section-title', text: 'CRAFTING' }));
-    const craftArea = this._make('div', { class: 'craft-area' });
+    let craftSlots = [], outSlot = null, recipeSlots = [], furnaceEls = null;
+    if (this.furnacePos) {
+      furnaceEls = this._buildFurnaceArea(panel);
+    } else {
+      // ---- Crafting area: grid + arrow + output, beside the recipe book ----
+      panel.appendChild(this._make('div', { class: 'section-title', text: 'CRAFTING' }));
+      const craftArea = this._make('div', { class: 'craft-area' });
 
-    const gridSize = this.craftingTable ? 3 : 2;
-    const gridEl = this._make('div', { class: 'craft-grid ' + (this.craftingTable ? 'g3' : 'g2') });
-    const craftSlots = [];
-    // Map the visible grid cells to canonical craftGrid indices (top-left).
-    const cellIndices = this.craftingTable
-      ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
-      : [0, 1, 3, 4];
-    for (const idx of cellIndices) {
-      const slot = this._makeSlot();
-      slot.dataset.kind = 'craft';
-      slot.dataset.cell = String(idx);
-      slot.addEventListener('click', (e) => this._onCraftSlotClick(idx, e));
-      slot.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onCraftSlotClick(idx, e); });
-      slot.addEventListener('mouseenter', () => this._showTooltipFor(this.craftGrid[idx]));
-      slot.addEventListener('mouseleave', () => this._hideTooltip());
-      craftSlots.push({ idx, el: slot });
-      gridEl.appendChild(slot);
+      const gridSize = this.craftingTable ? 3 : 2;
+      const gridEl = this._make('div', { class: 'craft-grid ' + (this.craftingTable ? 'g3' : 'g2') });
+      craftSlots = [];
+      // Map the visible grid cells to canonical craftGrid indices (top-left).
+      const cellIndices = this.craftingTable
+        ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
+        : [0, 1, 3, 4];
+      for (const idx of cellIndices) {
+        const slot = this._makeSlot();
+        slot.dataset.kind = 'craft';
+        slot.dataset.cell = String(idx);
+        slot.addEventListener('click', (e) => this._onCraftSlotClick(idx, e));
+        slot.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onCraftSlotClick(idx, e); });
+        slot.addEventListener('mouseenter', () => this._showTooltipFor(this.craftGrid[idx]));
+        slot.addEventListener('mouseleave', () => this._hideTooltip());
+        craftSlots.push({ idx, el: slot });
+        gridEl.appendChild(slot);
+      }
+      craftArea.appendChild(gridEl);
+
+      craftArea.appendChild(this._make('div', { class: 'craft-arrow', text: '→' }));
+
+      const outWrap = this._make('div', { class: 'craft-out' });
+      outSlot = this._makeSlot();
+      outSlot.dataset.kind = 'output';
+      outSlot.addEventListener('click', (e) => this._onOutputClick(e));
+      outSlot.addEventListener('mouseenter', () => {
+        const m = this._matchCraft();
+        this._showTooltipFor(m ? m.output.id : null);
+      });
+      outSlot.addEventListener('mouseleave', () => this._hideTooltip());
+      outWrap.appendChild(outSlot);
+      craftArea.appendChild(outWrap);
+
+      panel.appendChild(craftArea);
+
+      // ---- Recipe book (scrollable, click to auto-craft) -----------------
+      panel.appendChild(this._make('div', { class: 'section-title', text: 'RECIPE BOOK' }));
+      const book = this._make('div', { class: 'recipe-book' });
+      recipeSlots = this._buildRecipeBook(book);
+      panel.appendChild(book);
     }
-    craftArea.appendChild(gridEl);
-
-    craftArea.appendChild(this._make('div', { class: 'craft-arrow', text: '→' }));
-
-    const outWrap = this._make('div', { class: 'craft-out' });
-    const outSlot = this._makeSlot();
-    outSlot.dataset.kind = 'output';
-    outSlot.addEventListener('click', (e) => this._onOutputClick(e));
-    outSlot.addEventListener('mouseenter', () => {
-      const m = this._matchCraft();
-      this._showTooltipFor(m ? m.output.id : null);
-    });
-    outSlot.addEventListener('mouseleave', () => this._hideTooltip());
-    outWrap.appendChild(outSlot);
-    craftArea.appendChild(outWrap);
-
-    panel.appendChild(craftArea);
-
-    // ---- Recipe book (scrollable, click to auto-craft) -----------------
-    panel.appendChild(this._make('div', { class: 'section-title', text: 'RECIPE BOOK' }));
-    const book = this._make('div', { class: 'recipe-book' });
-    const recipeSlots = this._buildRecipeBook(book);
-    panel.appendChild(book);
 
     // ---- Main storage (27) ---------------------------------------------
     panel.appendChild(this._make('div', { class: 'section-title', text: 'INVENTORY' }));
@@ -981,7 +1005,7 @@ export class Menus {
 
     this._invEls = {
       overlay, panel,
-      craftSlots, outSlot, mainSlots, hotSlots, recipeSlots,
+      craftSlots, outSlot, mainSlots, hotSlots, recipeSlots, furnaceEls,
     };
   }
 
@@ -1009,10 +1033,14 @@ export class Menus {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = ICON_SIZE;
     const count = this._make('span', { class: 'count' });
+    const dur = this._make('div', { class: 'dur' });
+    dur.appendChild(document.createElement('i'));
     slot.appendChild(canvas);
     slot.appendChild(count);
+    slot.appendChild(dur);
     slot._canvas = canvas;
     slot._count = count;
+    slot._dur = dur;
     return slot;
   }
 
@@ -1027,6 +1055,17 @@ export class Menus {
       slotEl._count.textContent = stack.count > 1 ? String(stack.count) : '';
     } else {
       slotEl._count.textContent = '';
+    }
+    // Durability bar under worn tools.
+    if (slotEl._dur) {
+      const f = Items.wearFraction(stack);
+      if (f === null) slotEl._dur.style.display = 'none';
+      else {
+        slotEl._dur.style.display = 'block';
+        const bar = slotEl._dur.firstChild;
+        bar.style.width = (f * 100).toFixed(0) + '%';
+        bar.style.background = `hsl(${(f * 120).toFixed(0)}, 80%, 50%)`;
+      }
     }
   }
 
@@ -1044,9 +1083,14 @@ export class Menus {
       this._drawStack(el, key ? { id: key, count: 1 } : null);
     }
 
+    if (this._invEls.furnaceEls) this._furnaceSig = '';   // force the panel to redraw
+    if (this._invEls.furnaceEls) this._updateFurnacePanel();
+
     // Output slot reflects the current craft match (preview only).
-    const match = this._matchCraft();
-    this._drawStack(this._invEls.outSlot, match ? { id: match.output.id, count: match.output.count } : null);
+    if (this._invEls.outSlot) {
+      const match = this._matchCraft();
+      this._drawStack(this._invEls.outSlot, match ? { id: match.output.id, count: match.output.count } : null);
+    }
 
     // Recipe book: dim recipes the player can't currently afford.
     const crafting = this.game && this.game.crafting;
@@ -1067,6 +1111,146 @@ export class Menus {
     return crafting.match(this.craftGrid.slice());
   }
 
+  /* ---- the furnace screen ---------------------------------------------- */
+
+  // Build the smelting row: [ore] -> [output], with the fuel slot and flame
+  // beneath the ore. Returns the live elements the per-frame update drives.
+  _buildFurnaceArea(panel) {
+    panel.appendChild(this._make('div', { class: 'section-title', text: 'SMELTING' }));
+    const area = this._make('div', { class: 'furnace-area' });
+
+    const left = this._make('div', { class: 'furnace-col' });
+    const input = this._makeSlot();
+    const flame = this._make('div', { class: 'flame' });
+    const flameFill = this._make('i');
+    flame.appendChild(flameFill);
+    const fuel = this._make('div', { class: 'fuel-label', text: 'Fuel' });
+    const fuelSlot = this._makeSlot();
+    left.appendChild(input);
+    left.appendChild(flame);
+    left.appendChild(fuelSlot);
+    left.appendChild(fuel);
+    area.appendChild(left);
+
+    const arrow = this._make('div', { class: 'progress' });
+    const arrowFill = this._make('i');
+    arrow.appendChild(arrowFill);
+    area.appendChild(arrow);
+
+    const outWrap = this._make('div', { class: 'craft-out' });
+    const output = this._makeSlot();
+    outWrap.appendChild(output);
+    area.appendChild(outWrap);
+    panel.appendChild(area);
+    panel.appendChild(this._make('div', {
+      class: 'furnace-hint',
+      text: 'Ore, raw meat, sand, clay and logs cook with fuel: coal, charcoal, logs, planks or sticks.',
+    }));
+
+    const wire = (which, el) => {
+      el.dataset.kind = 'furnace-' + which;
+      el.addEventListener('click', (e) => this._onFurnaceSlotClick(which, e));
+      el.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onFurnaceSlotClick(which, e); });
+      el.addEventListener('mouseenter', () => {
+        const st = this._furnaceState();
+        const stack = st ? st[which] : null;
+        this._showTooltipFor(stack ? stack.id : null);
+      });
+      el.addEventListener('mouseleave', () => this._hideTooltip());
+    };
+    wire('input', input);
+    wire('fuel', fuelSlot);
+    wire('output', output);
+
+    return { input, fuel: fuelSlot, output, flameFill, arrowFill };
+  }
+
+  _furnaceState() {
+    const f = this.game && this.game.furnaces, p = this.furnacePos;
+    return f && p ? f.ensure(p.x, p.y, p.z) : null;
+  }
+
+  // Redraw the furnace slots when their contents change, and move the flame
+  // and progress bars every call.
+  _updateFurnacePanel() {
+    const els = this._invEls && this._invEls.furnaceEls;
+    const st = this._furnaceState();
+    if (!els || !st) return;
+
+    const stackSig = (s) => (s ? s.id + ':' + s.count : '-');
+    const sig = stackSig(st.input) + '|' + stackSig(st.fuel) + '|' + stackSig(st.output);
+    if (sig !== this._furnaceSig) {
+      this._furnaceSig = sig;
+      this._drawStack(els.input, st.input);
+      this._drawStack(els.fuel, st.fuel);
+      this._drawStack(els.output, st.output);
+    }
+
+    const flame = st.burnMax > 0 ? st.burn / st.burnMax : 0;
+    els.flameFill.style.height = (Math.max(0, Math.min(1, flame)) * 100).toFixed(1) + '%';
+    const r = st.input ? smeltRecipe(st.input.id) : null;
+    const prog = r ? st.cook / r.time : 0;
+    els.arrowFill.style.width = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + '%';
+
+    // The block can vanish under an open screen (broken by someone else).
+    const g = this.game, p = this.furnacePos;
+    if (g && g.world && p) {
+      const id = g.world.getBlock(p.x, p.y, p.z);
+      if (id !== ID.FURNACE && id !== ID.FURNACE_LIT) this._closeInventory();
+    }
+  }
+
+  // Click one of the three furnace slots, using the same cursor-stack model as
+  // the inventory. Input and fuel only accept valid items; output is take-only.
+  _onFurnaceSlotClick(which, e) {
+    const st = this._furnaceState();
+    if (!st) return;
+    const right = !!(e && e.button === 2);
+    const here = st[which];
+    const cur = this.cursor;
+    const accepts = (id) => (which === 'input' ? !!smeltRecipe(id) : which === 'fuel' ? fuelTime(id) > 0 : false);
+
+    if (which === 'output') {
+      if (!here) return;
+      if (!cur) {
+        const n = right ? Math.ceil(here.count / 2) : here.count;
+        this.cursor = { id: here.id, count: n };
+        here.count -= n;
+      } else if (cur.id === here.id) {
+        const room = Items.stackSize(cur.id) - cur.count;
+        const n = Math.min(room, here.count);
+        cur.count += n;
+        here.count -= n;
+      } else return;
+      if (here.count <= 0) st.output = null;
+    } else if (!cur) {
+      if (!here) return;
+      const n = right ? Math.ceil(here.count / 2) : here.count;
+      this.cursor = { id: here.id, count: n };
+      here.count -= n;
+      if (here.count <= 0) st[which] = null;
+    } else {
+      if (!accepts(cur.id)) { this._emit('toast', { text: which === 'fuel' ? 'That will not burn' : 'That cannot be smelted', kind: 'warn' }); return; }
+      if (!here) {
+        const n = right ? 1 : cur.count;
+        st[which] = { id: cur.id, count: n };
+        cur.count -= n;
+        if (cur.count <= 0) this.cursor = null;
+      } else if (here.id === cur.id) {
+        const room = Items.stackSize(here.id) - here.count;
+        const n = Math.min(room, right ? 1 : cur.count);
+        here.count += n;
+        cur.count -= n;
+        if (cur.count <= 0) this.cursor = null;
+      } else {
+        // Swap the held stack with what is in the slot.
+        st[which] = { id: cur.id, count: cur.count };
+        this.cursor = { id: here.id, count: here.count };
+      }
+    }
+    this._afterSlotMutation();
+  }
+
   /* ---- slot interactions (click pickup / place via the cursor) --------- */
 
   // Click an inventory storage/hotbar slot: classic pick-up / put-down with a
@@ -1083,22 +1267,22 @@ export class Menus {
       if (!here) return;
       if (e && e.button === 2) {
         const half = Math.ceil(here.count / 2);
-        this.cursor = { id: here.id, count: half };
+        this.cursor = cloneStack(here, half);
         here.count -= half;
         if (here.count <= 0) slots[slotIndex] = null;
       } else {
-        this.cursor = { id: here.id, count: here.count };
+        this.cursor = cloneStack(here);
         slots[slotIndex] = null;
       }
     } else {
       if (!here) {
         // Place into an empty slot (one on right-click, all on left).
         if (e && e.button === 2) {
-          slots[slotIndex] = { id: cur.id, count: 1 };
+          slots[slotIndex] = cloneStack(cur, 1);
           cur.count -= 1;
           if (cur.count <= 0) this.cursor = null;
         } else {
-          slots[slotIndex] = { id: cur.id, count: cur.count };
+          slots[slotIndex] = cloneStack(cur);
           this.cursor = null;
         }
       } else if (here.id === cur.id) {
@@ -1115,8 +1299,8 @@ export class Menus {
         }
       } else {
         // Different items: swap stack with cursor.
-        slots[slotIndex] = { id: cur.id, count: cur.count };
-        this.cursor = { id: here.id, count: here.count };
+        slots[slotIndex] = cloneStack(cur);
+        this.cursor = cloneStack(here);
       }
     }
 
@@ -1225,7 +1409,13 @@ export class Menus {
 
   _returnCursorToInventory() {
     if (!this.cursor) return;
-    this._returnKeyToInventory(this.cursor.id, this.cursor.count);
+    const inv = this.game && this.game.inventory;
+    if (inv && typeof inv.addStack === 'function') {
+      const left = inv.addStack(this.cursor);
+      if (left > 0) this._spillToWorld(this.cursor.id, left);
+    } else {
+      this._returnKeyToInventory(this.cursor.id, this.cursor.count);
+    }
     this.cursor = null;
     this._hideGhost();
   }

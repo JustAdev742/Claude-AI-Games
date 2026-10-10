@@ -124,6 +124,42 @@ export class WorldGen {
     return this._column(wx | 0, wz | 0).height;
   }
 
+  // How good is (x, z) as a place to begin? 1 = a broad, gentle patch of dry
+  // land; 0 = water or a drop. Samples a 5x5 grid around the point.
+  spawnScore(x, z) {
+    let dry = 0, lo = Infinity, hi = -Infinity;
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const h = this.heightAt(x + dx * 6, z + dz * 6);
+        if (h > SEA + 1) dry++;
+        if (h < lo) lo = h;
+        if (h > hi) hi = h;
+      }
+    }
+    const flat = (hi - lo) <= 10;
+    return (dry / 25) * (flat ? 1 : 0.6);
+  }
+
+  // Nearest column (spiralling out from the request) whose surroundings are
+  // essentially all dry and gentle; failing that, the best-scoring one seen.
+  findSpawnSpot(wx, wz) {
+    let best = null;
+    const consider = (x, z) => {
+      const score = this.spawnScore(x, z);
+      if (!best || score > best.score) best = { x, z, score };
+      return score >= 0.99;
+    };
+    if (consider(wx, wz)) return best;
+    for (let r = 12; r <= 720; r += 12) {
+      const steps = Math.max(12, Math.round(r / 6));
+      for (let a = 0; a < steps; a++) {
+        const ang = (a / steps) * Math.PI * 2;
+        if (consider(wx + Math.round(Math.cos(ang) * r), wz + Math.round(Math.sin(ang) * r))) return best;
+      }
+    }
+    return best && best.score >= 0.5 ? best : null;
+  }
+
   // Full descriptor for external callers (spawning, debug overlay).
   columnInfo(wx, wz) {
     return this._column(wx | 0, wz | 0);
