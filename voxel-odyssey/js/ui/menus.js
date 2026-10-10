@@ -714,7 +714,9 @@ export class Menus {
       ['Drop item', '<kbd>Q</kbd>'],
       ['Inventory / Crafting', '<kbd>E</kbd>'],
       ['Pause', '<kbd>Esc</kbd>'],
+      ['Free the mouse (no pause)', '<kbd>U</kbd>, then click the game to capture it again'],
       ['Toggle debug overlay', '<kbd>F3</kbd>'],
+      ['On a touch screen', 'Left stick to move · drag to look · Mine / Place / Jump on the right · tap the hotbar to choose an item'],
     ];
     const table = this._make('table', { class: 'controls-table' });
     for (const [action, keys] of rows) {
@@ -731,8 +733,9 @@ export class Menus {
     [
       'Punch a tree, then craft planks and a crafting table.',
       'Place a crafting table and right-click it for the 3×3 grid.',
+      'Right-click a furnace to smelt: put ore (or raw meat, sand, clay) on top and coal, logs or planks underneath as fuel.',
       'Torches keep monsters away — light up your home before nightfall.',
-      'Better tools (stone, iron, diamond) mine faster and last longer.',
+      'Better tools (stone, iron, diamond) mine faster and last longer — but every tool wears out; watch the bar under its icon.',
     ].forEach((t) => tips.appendChild(this._make('li', { text: t })));
     panel.appendChild(tips);
 

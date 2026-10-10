@@ -1,7 +1,7 @@
 /* Grab a gameplay screenshot for eyeballing visual changes.
    Usage: node tests/shot.mjs [outfile] [timeOfDay] [spec-json]
    spec: { biome: 'desert'|'jungle'|..., seed, view: 'vista'|'ground'|'tree'|'water'|'underwater', yaw, pitch, dist, log: 'pine'|'birch',
-           give: [item ids], hold: hotbar index, mobs: ['pig', ...] }
+           give: [item ids], hold: hotbar index, mobs: ['pig', ...], torches: [[right,forward],...], weather: 'rain' }
    'vista'  hover above the spawn and look down over the terrain (default)
    'ground' stand on the surface at spawn, looking at the horizon
    'tree'   stand a few blocks from the nearest log, looking at its crown
@@ -97,7 +97,18 @@ try {
         y = w.heightAt(Math.floor(x), Math.floor(z)) + 2.6; flying = true; pitch = spec.pitch ?? 0.12;
         note = `tree at ${tx},${tz}`;
       } else note = 'no tree found';
-    } else if (spec.view === 'water' || spec.view === 'underwater') {
+    } else if (spec.view === 'underwater') {
+      // A deep water column near spawn: stand 2 blocks under the surface.
+      let best = null;
+      for (let dx = -90; dx <= 90 && !best; dx++) for (let dz = -90; dz <= 90; dz++) {
+        if (w.heightAt(px + dx, pz + dz) <= 21 && (!best || dx * dx + dz * dz < best.d)) best = { dx, dz, d: dx * dx + dz * dz };
+      }
+      if (best) {
+        x = px + best.dx + 0.5; z = pz + best.dz + 0.5; y = 26.2; flying = true;
+        yaw = spec.yaw ?? 0.7; pitch = spec.pitch ?? 0.2;
+        note = `underwater at ${px + best.dx},${pz + best.dz}`;
+      } else note = 'no deep water found';
+    } else if (spec.view === 'water') {
       let best = null;
       for (let dx = -70; dx <= 70; dx++) for (let dz = -70; dz <= 70; dz++) {
         const h = w.heightAt(px + dx, pz + dz);
@@ -106,7 +117,6 @@ try {
       if (best) {
         x = px + best.dx + 0.5; z = pz + best.dz + 0.5; y = best.h + 1.01; flying = false;
         yaw = spec.yaw ?? -Math.PI / 2; pitch = spec.pitch ?? -0.08;
-        if (spec.view === 'underwater') { x += 4; y = 26.4; flying = true; pitch = spec.pitch ?? 0.15; }
         note = `shore at ${px + best.dx},${px + best.dz}`;
       } else note = 'no shore found';
     }
@@ -123,6 +133,13 @@ try {
       const gy = w.heightAt(Math.floor(sx), Math.floor(sz)) + 1;
       g.entities.spawn(type, sx, gy, sz);
     });
+    // spec.torches = [[dx, dz], ...]: torches on the ground near the camera; spec.weather = 'rain' | 'snow'.
+    // Offsets are (right, forward) relative to the view direction.
+    (spec.torches || []).forEach(([right, fwd]) => {
+      const tx = Math.floor(x - Math.sin(yaw) * fwd + Math.cos(yaw) * right), tz = Math.floor(z - Math.cos(yaw) * fwd - Math.sin(yaw) * right);
+      g.world.setBlock(tx, w.heightAt(tx, tz) + 1, tz, B.TORCH, { cause: 'place', by: 'test' });
+    });
+    if (spec.weather) g.weather.setWeather(spec.weather, 1);
     g.player.flying = flying;
     g.player.position.set(x, y, z);
     g.player.velocity.set(0, 0, 0);

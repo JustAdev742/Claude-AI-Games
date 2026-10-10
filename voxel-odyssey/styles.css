@@ -241,7 +241,10 @@ html, body {
   background: var(--panel); border: 1px solid var(--slot-border); border-radius: 16px;
   padding: 26px 30px; width: min(560px, 92vw); box-shadow: var(--shadow);
   max-height: 90vh; overflow: auto;
+  /* Scrolls under a finger even though the page itself disables touch panning. */
+  touch-action: pan-y; -webkit-overflow-scrolling: touch;
 }
+@media (max-width: 520px) { .menu-panel { padding: 18px 16px; } }
 .menu-panel h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: 2px; }
 .menu-panel h2 { margin: 18px 0 10px; font-size: 18px; color: var(--accent-2); }
 .menu-panel .subtitle { color: var(--ink-dim); margin: 0 0 18px; font-size: 14px; }
@@ -320,7 +323,7 @@ input[type="range"]::-moz-range-thumb {
 .furnace-hint { font-size: 12px; color: var(--ink-dim); margin-top: 8px; max-width: 420px; }
 .section-title { font-size: 13px; color: var(--ink-dim); margin: 14px 0 4px; letter-spacing: 1px; }
 
-.recipe-book { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; }
+.recipe-book { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; touch-action: pan-y; }
 .recipe-book .slot { width: 44px; height: 44px; cursor: pointer; }
 .recipe-book .slot:hover { border-color: var(--accent-2); }
 
@@ -403,14 +406,24 @@ body.touch #touch-controls { display: block; }
 #touch-inv   { right: calc(150px + env(safe-area-inset-right)); }
 #touch-pause { right: calc(96px + env(safe-area-inset-right)); }
 
+/* Portrait phones: let the 9-wide inventory grid shrink to fit the panel. */
+@media (max-width: 600px) {
+  #inventory-screen .menu-panel { padding: 14px 10px; }
+  #inventory-screen .inv-grid { gap: 3px; }
+  #inventory-screen .inv-grid .slot { width: 100%; height: auto; aspect-ratio: 1; border-radius: 6px; }
+  #inventory-screen .inv-grid .slot canvas { width: 78%; height: 78%; }
+  .recipe-book .slot { width: 38px; height: 38px; }
+}
+
 /* Small screens: shrink the HUD so it fits beside the controls. */
 @media (max-height: 520px), (max-width: 720px) {
-  #hotbar .slot { width: 40px; height: 40px; border-radius: 6px; }
-  #hotbar .slot canvas { width: 30px !important; height: 30px !important; }
+  /* Nine slots must fit across the screen, however narrow. */
+  #hotbar .slot { width: min(40px, calc((100vw - 40px) / 9 - 4px)); height: min(40px, calc((100vw - 40px) / 9 - 4px)); border-radius: 6px; }
+  #hotbar .slot canvas { width: 75% !important; height: 75% !important; }
   #hotbar .slot .key { display: none; }
   #info-panel { transform: scale(0.8); transform-origin: top left; }
   .pip { width: 12px; height: 12px; }
-  #status-bars { bottom: 62px; }
+  #status-bars { bottom: 72px; }
 }
 /* Portrait phones: lift the controls above the hotbar. */
 @media (orientation: portrait) and (max-width: 720px) {

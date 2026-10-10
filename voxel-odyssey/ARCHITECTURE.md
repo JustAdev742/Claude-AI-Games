@@ -503,3 +503,31 @@ when imported in Node (no `window`/Three.js at import time). Avoid top-level Thr
 those files (import Three only where geometry is built — that lives in `world.js`,
 `particles.js`, `sky.js`, `player.js`, `mob.js`, UI). `meshChunk` returns plain arrays so it
 can be unit-tested headless.
+
+## Addenda (post-contract systems)
+
+These landed after the original module contracts above and follow the same
+conventions (`new System(game)`, optional `init()`, everything read off `game`).
+
+- **`js/items/furnace.js` → `Furnaces`** (`game.furnaces`): per-position smelting
+  state `{input, fuel, output, burn, burnMax, cook}`. `update(dt)` ticks every
+  furnace and keeps the world block in step (`ID.FURNACE` ↔ `ID.FURNACE_LIT`,
+  written with `cause:'network'` so it is not echoed to a multiplayer server).
+  `serialize()/load()` go into the save as `furnaces`. Breaking a furnace
+  (`block:break`) spills its slots. Opened with `menus.openFurnace(x,y,z)`.
+- **Tool wear**: an optional `wear` field on an inventory stack (uses spent).
+  `inventory.wearSelected(n)` spends it and fires `tool:break`; `cloneStack()`
+  copies stacks without losing it; `Items.durability()/wearFraction()` expose it.
+- **`js/world/biomeColor.js`**: pure grass/foliage/water tint functions of
+  (temperature, moisture). `WorldGen.generateChunk` records `chunk.climate`
+  (interleaved per column); `meshChunk` builds per-column tints from it
+  (`opts.climate` for the worker, which gets a copy in the `mesh` message).
+- **`Sky.getTerrainLight()`** returns, besides daylight/tint/time/sunDir, the
+  linear-light inputs the voxel shader needs: `ambSky`, `ambGround`, `sunLight`,
+  `horizon`, `zenith`, `exposure` (scaled by the Brightness setting).
+- **`js/ui/touch.js` → `TouchControls`** (`game.touch`): on-screen controls on
+  coarse-pointer devices. Routes through `Input.touchAction/touchButton/
+  addTouchLook`; hides itself behind menus. `Input.touch` is
+  `{moveX, moveY, lookDX, lookDY, active, held}`.
+- **`WorldGen.findSpawnSpot(x,z)` / `spawnScore(x,z)`**: nearest broad, gentle
+  stretch of land (used by `World.getGroundSpawn`).
