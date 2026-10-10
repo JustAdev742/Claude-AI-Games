@@ -41,6 +41,10 @@ const ITEM_MERGE_RANGE = 0.65;   // nearby same-type drops merge to reduce clutt
 
 // How many mobs may start a new path search in one frame.
 const MAX_PATHS_PER_FRAME = 3;
+// ...and a cap in milliseconds as well: three searches are cheap on a fast CPU
+// and a visible hitch on a slow one, so once a frame's searches have used this
+// much time the rest wait for the next frame.
+const PATH_TIME_BUDGET_MS = 2.5;
 
 const SPAWN_INTERVAL = 2.0;      // seconds between ambient spawn attempts
 const SPAWN_MIN_RADIUS = 14;     // blocks: don't spawn right on top of the player
@@ -83,6 +87,8 @@ export class EntityManager {
     // low-end machines we are trying not to exclude. Mobs that miss the budget
     // keep following their existing path and try again next frame.
     this.pathBudget = 0;
+    this.pathSpentMs = 0;
+    this.pathTimeBudgetMs = PATH_TIME_BUDGET_MS;
 
     // A lightly-entropic RNG for ambient spawning. We deliberately avoid
     // Math.random() (per project rules) and seed from the world seed + a clock
@@ -260,6 +266,7 @@ export class EntityManager {
     }
     // Refill the search budget each frame.
     this.pathBudget = MAX_PATHS_PER_FRAME;
+    this.pathSpentMs = 0;
 
     if (!dt || dt <= 0) return;
     if (dt > 0.1) dt = 0.1;   // clamp huge spikes (tab refocus) to avoid tunneling

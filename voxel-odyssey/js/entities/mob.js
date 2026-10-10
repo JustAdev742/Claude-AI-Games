@@ -708,9 +708,13 @@ export class Mob {
       this._repathTimer = 0.6 + ((this.id % 7) * 0.05);
       if (em.pathBudget > 0) {
         em.pathBudget--;
+        const t0 = performance.now();
         const res = pf.find(this.position, target, {
           height: Math.max(1, Math.ceil(this.height)),
         });
+        // Out of time for this frame: later mobs keep their old paths until the next one.
+        em.pathSpentMs += performance.now() - t0;
+        if (em.pathSpentMs >= em.pathTimeBudgetMs) em.pathBudget = 0;
         this._path = res.path.length ? res.path : null;
         this._pathGoal = { x: target.x, z: target.z };
         this._pathIndex = 0;

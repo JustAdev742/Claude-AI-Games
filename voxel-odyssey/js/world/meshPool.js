@@ -50,6 +50,8 @@ function workerFactory() {
   return () => new Worker(new URL('./mesher.worker.js', import.meta.url), { type: 'module' });
 }
 
+const WORKER_DEPTH = 2;
+
 export class MeshPool {
   constructor(world) {
     this.world = world;
@@ -108,8 +110,13 @@ export class MeshPool {
           this.shutdown();
         };
         this.workers.push(w);
-        this.idle.push(w);
       }
+      // Each worker may hold DEPTH jobs at once. A worker's next job then waits
+      // in its own message queue instead of for the main thread to notice the
+      // last result and send another — on a machine rendering at 10 fps that
+      // wait is a whole frame per job. `idle` lists a worker once per free
+      // slot, interleaved so the first jobs spread across all of them.
+      for (let d = 0; d < WORKER_DEPTH; d++) for (const w of this.workers) this.idle.push(w);
       this.enabled = this.workers.length > 0;
     } catch (err) {
       console.warn('mesh workers unavailable, meshing on the main thread', err);

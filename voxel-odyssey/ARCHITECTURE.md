@@ -540,3 +540,52 @@ conventions (`new System(game)`, optional `init()`, everything read off `game`).
   single definition of a tree, used by `WorldGen._tree` and by `Growth`
   (`game.growth`), which tracks sapling blocks (via `block:update`) and grows
   them with `cause:'network'` writes. Skipped while connected to a server.
+
+### Performance systems
+
+- **`js/core/perf.js` → `Perf`** (`game.perf`): per-frame section timer.
+  `perf.add(name, ms)` accumulates into the current frame, `endFrame()` rolls it
+  into smoothed averages, worst-case values and a hitch counter. `perf.now()` is
+  the clock to use. The F3 overlay and `tests/bench.mjs` read it. Section names in
+  use: `gen`, `gen.light`, `w.stream`, `w.light`, `w.mesh`, `w.upload`, `update`,
+  `render`, `entities`, …
+- **`js/core/quality.js`**: `PRESETS` (low/medium/high bundles of
+  `renderDistance`, `renderScale`, `shaderTier`, `fancyGraphics`, `particleScale`,
+  `mobScale`, `streamBudgetMs`, `lightBudget`, `maxFps`), `classify(hw)` (GPU
+  string / cores / memory / mobile → preset), `Governor` (frame-time driven
+  scale/distance changes, bounded by what the player chose) and `Quality`
+  (`game.quality`: `setPreset`, `applyAll`, per-frame `update`). `Quality.prepare`
+  runs before the renderer exists. The governor lowers `state.runtime.renderDistance`
+  rather than the setting, and `state.renderDistance` (getter) is what systems read.
+- **Workers** — `js/world/workerCore.js` is what a world worker does:
+  `createWorkerCore(post).handle(msg)` for `mesh` (padded 18×80×18 neighbourhood →
+  packed buckets), `gen` (`{cx, cz, seed}` → `blocks`, `climate`, `empty`) and
+  `atlas`. `mesher.worker.js` is the three-line host. `MeshPool` queues both kinds
+  nearest-first (`request` for meshes, `requestGen` for terrain), keeps up to two
+  jobs per worker, discards results from an older `generation` (world reset /
+  atlas change), and on a worker error hands everything back to the world
+  (`World._onGenLost`, remesh queue) so the main thread takes over.
+  `tests/workers.test.mjs` runs `workerCore` behind a fake `Worker`
+  (`structuredClone` with transfer lists, async delivery).
+- **Streaming in `World.update`**: the plan (`_offsets(rd, dilate)`) is rebuilt
+  only when the anchor chunk or view distance changes; with workers the whole plan
+  is handed to the pool at once, finished terrain is adopted
+  (`_adoptGenerated` → edits, lighting, `_onChunkLoaded`) under `streamBudgetMs`,
+  and a chunk is meshed only when all eight neighbours exist. `ensureChunk` is
+  the synchronous path (physics, block edits, no-worker fallback) and wins races:
+  a worker result for a chunk that already exists is dropped. While the world is
+  not yet `_primed` the main thread also takes unstarted jobs
+  (`MeshPool.stealGen`). `World.isLoadedAt(wx, wz)` lets callers check without
+  generating; mobs use it (unloaded terrain is a wall; mobs there are not ticked).
+- **`js/world/vertexPack.js`**: the 16-byte chunk vertex in three attributes:
+  `aPos` (Uint16×4: x, y, z in 1/256 block, texture layer + 1), `aCol` (Uint8×4:
+  r, g, b as value/2, uv corner code), `aMisc` (Uint8×4: skylight, blocklight, AO,
+  face index). Normals come from a face-index table in the shader (`COMPACT`
+  define). Chunk geometry shares one bounding sphere. The viewmodel (held item)
+  keeps the float layout (`QUALITY` define only).
+- **`js/render/material.js`** takes `defines: { QUALITY: 0|1|2, COMPACT: 1 }`;
+  `World.setShaderTier(tier)` switches every terrain material.
+- **Single-file build** (`tools/build-single-file.mjs`): bundles the worker
+  separately (IIFE), embeds it as `<script id="mesher-worker-src" type="text/plain">`,
+  minifies, and targets `es2018`. `MeshPool.workerFactory` prefers the embedded
+  source (Blob worker; works from `file://`) and otherwise loads the module file.

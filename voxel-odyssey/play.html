@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voxel Odyssey — play</title>
+  <!-- A launcher you can open by double-clicking: no server, no install, no
+       admin rights. Each button opens the single-file build next to this page
+       (dist/voxel-odyssey.html) with graphics settings chosen in the link. -->
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: radial-gradient(ellipse at 50% 0%, #1b2a4a 0%, #0b1020 70%);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #dfe7f5;
+    }
+    main { width: min(640px, 100% - 32px); padding: 28px 0; }
+    h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 2px; }
+    h1 span { color: #7fe07f; }
+    p.lead { margin: 0 0 22px; color: #9fb0cf; }
+    a.play {
+      display: block; margin: 0 0 12px; padding: 14px 18px; border-radius: 10px;
+      background: #16213b; border: 1px solid #2c3d63; color: inherit; text-decoration: none;
+    }
+    a.play:hover, a.play:focus-visible { background: #1d2c4f; border-color: #7fe07f; outline: none; }
+    a.play b { display: block; font-size: 18px; }
+    a.play small { color: #9fb0cf; }
+    a.play.main { background: #1f5b2d; border-color: #3fae55; }
+    a.play.main:hover, a.play.main:focus-visible { background: #27733a; }
+    h2 { margin: 26px 0 6px; font-size: 16px; color: #bcd0f5; }
+    ul { margin: 0; padding-left: 20px; color: #9fb0cf; }
+    li { margin: 4px 0; }
+    code { background: #16213b; padding: 1px 6px; border-radius: 4px; color: #dfe7f5; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>VOXEL <span>ODYSSEY</span></h1>
+  <p class="lead">Pick how hard the game should work. You can change it any time in
+    <b>Settings → Performance</b>.</p>
+
+  <a class="play main" href="dist/voxel-odyssey.html">
+    <b>▶ Play — automatic</b>
+    <small>Looks at your computer and picks the graphics for it. Start here.</small>
+  </a>
+  <a class="play" href="dist/voxel-odyssey.html?quality=low">
+    <b>▶ Play — older laptop</b>
+    <small>Low preset: shorter view distance, simpler lighting, lower resolution.</small>
+  </a>
+  <a class="play" href="dist/voxel-odyssey.html?quality=low&amp;scale=0.6&amp;distance=3&amp;fps=30">
+    <b>▶ Play — very slow computer</b>
+    <small>Smallest picture, shortest view, capped at 30 frames a second. Plays on almost anything with WebGL 2.</small>
+  </a>
+
+  <h2>If it runs badly</h2>
+  <ul>
+    <li>Close other tabs and programs; use a current <b>Chrome</b>, <b>Edge</b> or <b>Firefox</b>.</li>
+    <li>Turn on <b>hardware acceleration</b> in the browser's settings (it is sometimes off on managed machines).</li>
+    <li>Press <b>F3</b> in game for the frame-time profiler.</li>
+    <li>No admin rights? Nothing here installs anything. A portable browser on a USB stick works too.</li>
+  </ul>
+  <h2>Keep these together</h2>
+  <ul>
+    <li><code>play.html</code> and the <code>dist</code> folder (with <code>voxel-odyssey.html</code> inside). Or skip this page and just open <code>dist/voxel-odyssey.html</code>.</li>
+  </ul>
+</main>
+</body>
+</html>

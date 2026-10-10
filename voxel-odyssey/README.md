@@ -24,8 +24,47 @@ support**, mobs with AI, crafting, particles, and fully synthesized audio
 ### The quick way — one file, no server
 
 Download **[`dist/voxel-odyssey.html`](dist/voxel-odyssey.html)** and double-click
-it. That's the whole game — engine, Three.js, art and audio — in a single 1.5 MB
-file with everything inlined, so it opens straight from disk and works offline.
+it. That's the whole game — engine, Three.js, art, audio and the background
+worker threads — in a single ~1 MB file with everything inlined, so it opens
+straight from disk and works offline.
+
+### Old laptop, no admin rights
+
+Nothing needs installing and nothing needs a server, so a locked-down machine is
+fine. Copy the folder (or just `dist/voxel-odyssey.html`) anywhere you can write
+to — Downloads, a USB stick — and:
+
+1. Double-click **`play.html`** and pick **older laptop** or **very slow computer**
+   (or double-click `dist/voxel-odyssey.html` for automatic settings).
+2. If you can't open `play.html`, open the game file and choose
+   **Settings → Performance → Quality preset → Low — old laptops**.
+
+What helps most, in order:
+
+| If it is… | Do this |
+| --- | --- |
+| choppy at any setting | **Hardware acceleration** on in the browser's settings (managed machines often turn it off) and a current Chrome, Edge or Firefox. A portable browser on a USB stick works without admin. |
+| choppy only when you move | Lower **Render Distance** (3–4 chunks). Streaming terrain is the heaviest thing the game does. |
+| low frame rate while standing still | Lower **Resolution (render scale)** to 50–75%. Fewer pixels is the biggest win on weak graphics. |
+| uneven | Set **Frame rate limit** to 30 fps — a steady 30 feels better than a wobbling 45. |
+| still too slow | Preset **Low**, **Shader detail** Low, **Fancy Graphics** off. (The Low preset also cuts mobs and particles.) |
+
+The game also looks after this itself: on first run it reads the GPU, core count
+and screen size and picks Low / Medium / High, and while you play an adaptive
+governor trades resolution (then view distance) for frame rate and hands it back
+when there is headroom. Switch it off with the **Adaptive resolution** toggle in
+**Settings → Performance**.
+
+The same choices as URL parameters, for a link you can hand to someone:
+
+```
+dist/voxel-odyssey.html?quality=low                      low | medium | high | auto
+dist/voxel-odyssey.html?quality=low&scale=0.6&distance=3&fps=30
+```
+
+If the page says WebGL 2 isn't available, the graphics driver or browser is too
+old (or acceleration is off): update the browser, enable acceleration, or try
+another browser. Integrated graphics older than roughly 2012 cannot run it.
 
 ### From source
 
@@ -175,6 +214,10 @@ to look, and tap the hotbar to choose an item. They hide behind menus. Add
   ends where the world does, all shifting through dawn, day, dusk and night.
 - **Effects & audio** — block-break particles, water splashes, and a fully
   **synthesized** soundscape + gentle ambient music (zero audio files).
+- **Built to run on weak hardware** — terrain is generated and meshed on worker
+  threads, chunks use a 16-byte vertex, streaming and uploads run under
+  per-frame time budgets, and Low/Medium/High presets plus an adaptive
+  resolution governor keep it playable. See [Performance](#-performance).
 - **Saves** — your world (seed + your edits + inventory) persists in
   `localStorage`; **Continue** picks up where you left off.
 
@@ -189,9 +232,11 @@ styles.css            HUD / menu / inventory styling
 vendor/three.module.js  Three.js r160 (vendored, MIT)
 js/
   main.js             bootstrap, game-flow state machine, the loop
-  core/   utils, events (bus), state (settings/save), input, engine
+  core/   utils, events (bus), state (settings/save), input, engine,
+          perf (frame profiler), quality (presets, hardware detection, governor)
   world/  constants, blocks, noise, climate, worldgen, trees, growth, biomeColor,
-          chunk (mesher), world, lighting (flood fill), meshPool + mesher.worker
+          chunk (mesher), world, lighting (flood fill), vertexPack (16-byte vertex),
+          meshPool + mesher.worker + workerCore (terrain gen and meshing off-thread)
   render/ material (voxel shader), atlas (texture array), textures
           (procedural set), resourcepack (.zip reader), resources
   net/    client (prediction + interpolation), remotePlayers (rigs)
@@ -201,9 +246,11 @@ js/
   ui/     hud, menus, touch (on-screen controls)
 shared/ protocol.js  — wire format, imported by both client and server
 server/ index.js (game server + static host), websocket.js (RFC 6455)
+play.html             double-click launcher: auto / older laptop / very slow
 tests/  node: run, lighting, resourcepack, pathfinder, worldgen, furnace, biomecolor,
-        growth, chest, multiplayer · browser: smoke, interact, e2e-controls,
-        e2e-furnace, e2e-sapling, e2e-chest, e2e-touch
+        growth, chest, quality, vertexpack, multiplayer, streaming, workers ·
+        browser: smoke, interact, e2e-controls, e2e-furnace, e2e-sapling, e2e-chest,
+        e2e-touch, e2e-quality, e2e-bundle · bench.mjs (performance benchmark)
 tools/  build-single-file.mjs (inlines everything into dist/voxel-odyssey.html)
 ```
 
@@ -230,10 +277,59 @@ that mobs use from the same numbers, so a pig is lit like the grass it stands
 on. Doing this in display space instead — multiplying light levels into sRGB
 colours — compounds the darkening and renders mid-green leaves near black.
 
+## ⚡ Performance
+
+How the game stays playable on weak machines, and how to measure it.
+
+**Work is moved off the frame.** Terrain generation and meshing run on worker
+threads (`world/workerCore.js`, hosted by `mesher.worker.js`; in the single file
+the worker source is embedded and started from a Blob, which also works from
+`file://`). Both go through one nearest-first queue, so the chunk you are about
+to see is never stuck behind distant terrain. Finished chunks come back as
+transferred typed arrays; the main thread only applies edits, runs lighting and
+uploads geometry, each under a per-frame millisecond budget. While the loading
+screen is up the main thread helps generate. If a worker fails, everything falls
+back to the main thread.
+
+**Less work per chunk.** Meshes use a 16-byte vertex (positions, colours and
+light packed; normals derived in the shader) instead of 60, which cut geometry
+memory and upload size 3.5×. Streaming re-plans only when you cross a chunk
+border; lighting uses lookup tables and direct indexing; terrain generation is
+~45% faster than before with byte-identical output (checked by a world hash).
+Mobs wait for their chunk to arrive instead of forcing it to generate, and mob
+pathfinding has a per-frame time cap.
+
+**Less work per pixel.** Three shader tiers (the Low tier skips water ripples,
+sun glint, dithering and the extra wave octaves), render scale as a pixel-ratio
+multiplier, an optional frame cap, and particle and mob scaling.
+
+**Presets and the governor.** `core/quality.js` holds the Low/Medium/High
+bundles, first-run hardware detection and the adaptive governor (render scale
+first, then view distance; it only ever lowers things below what you chose).
+
+**Measuring.** Press **F3** in game: frame time, CPU split by section
+(generation, light, mesh, upload, render…), worst frames, draw calls and
+triangles. For repeatable numbers:
+
+```bash
+node tests/bench.mjs --file dist/voxel-odyssey.html --settings '{"quality":"low"}'
+```
+
+loads a fixed world, then measures standing still and a fast flythrough, and
+prints JSON. It uses software rendering (SwiftShader) as a stand-in for a weak
+GPU, so fill-rate-bound changes show up, but absolute frame rates are **not**
+what a real old laptop will see; the CPU-side figures (milliseconds per section)
+are the transferable ones. For reference, on the build machine's fast flythrough
+the JavaScript time of a frame's update (`update` in the profiler) went from
+23 ms on average and 161 ms worst, before this work, to 3 ms and 22 ms with the
+automatically chosen Low preset (9 ms and 27 ms at High), and the time to a
+playable world from 6.0 s to 2.4 s. Those are one machine's numbers, not a
+promise for yours.
+
 ## 🧪 Tests
 
 ```bash
-npm test                     # all Node suites (~360 assertions)
+npm test                     # all Node suites (~480 assertions)
 node tests/run.js            # pure logic: noise, worldgen, meshing, inventory, crafting
 node tests/lighting.test.mjs # light propagation: falloff, shadows, relighting, cross-chunk
 node tests/resourcepack.test.mjs  # the ZIP reader, against archives built byte-by-byte
@@ -243,10 +339,17 @@ node tests/biomecolor.test.mjs    # tint model, mesher integration, climate reco
 node tests/growth.test.mjs        # tree shapes + sapling growth against a mock world
 node tests/chest.test.mjs         # storage rules, stack moving, persistence
 node tests/multiplayer.test.mjs   # protocol round-trips + a live server driven by real sockets
+node tests/quality.test.mjs       # presets, hardware classification, the adaptive governor
+node tests/vertexpack.test.mjs    # the 16-byte vertex round-trips the mesher's output
+node --import ./tests/three-resolve.mjs tests/streaming.test.mjs  # budgets, nearest-first, unloading, edits
+node --import ./tests/three-resolve.mjs tests/workers.test.mjs    # the real worker code behind a fake Worker:
+                                  # equivalence with the main thread, races, resets, failure fallback
 
 npm run test:browser         # headless Chromium: rendering + real gameplay
                              # (e2e-controls: real mouse; e2e-furnace / e2e-chest / e2e-sapling: real clicks;
-                             #  e2e-touch: emulated phone with touch events)
+                             #  e2e-touch: emulated phone with touch events;
+                             #  e2e-quality: presets + URL overrides; e2e-bundle: play.html -> the
+                             #  single file from file:// with workers running)
 ```
 
 ## 📄 License

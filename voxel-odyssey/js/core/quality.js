@@ -197,6 +197,9 @@ export class Quality {
     this.hardware = null;
     this._applying = false;
     this._unsubs = [];
+    this._toldSlow = false;
+    this._lastScale = 1;
+    this._lastDistance = 99;
   }
 
   // Called once at startup, BEFORE the engine exists: on a first run (or when
@@ -208,13 +211,15 @@ export class Quality {
     if (s.quality !== 'auto') return null;
     const hw = gatherHardware();
     const name = classify(hw);
+    let fresh = false;
     if (!s._autoApplied) {
       const p = settingsForPreset(name, hw);
       for (const k of PRESET_KEYS) s[k] = p[k];
       s._autoApplied = name;
       state._persistSettings();
+      fresh = true;
     }
-    return { hw, name };
+    return { hw, name, fresh };
   }
 
   init(prepared) {
@@ -226,6 +231,14 @@ export class Quality {
       this._unsubs.push(ev.on('settings:change', (e) => this._onSetting(e)));
     }
     this.applyAll();
+    // Say so when the first-run guess is the Low preset, once the world is up
+    // (a toast during the loading screen would go unseen).
+    if (prepared && prepared.fresh && prepared.name === 'low' && ev) {
+      const off = ev.on('world:ready', () => {
+        game.toast('Modest graphics detected — using the Low preset. Settings → Performance has more options.', 'warn');
+        if (typeof off === 'function') off();
+      });
+    }
     return this;
   }
 
@@ -235,6 +248,8 @@ export class Quality {
     this.governor.setLimits({ renderScale: s.renderScale, renderDistance: s.renderDistance });
     this.governor.scale = s.renderScale;
     this.governor.renderDistance = s.renderDistance;
+    this._lastScale = s.renderScale;
+    this._lastDistance = s.renderDistance;
   }
 
   // Choose a preset by name ('auto' re-detects). Writes the bundle into settings.
@@ -284,6 +299,11 @@ export class Quality {
     if (!s.dynamicResolution || f.mode !== 'play' || f.paused || f.inventoryOpen || document.hidden) return;
     const r = this.governor.frame(frameMs, cpuMs);
     if (!r.changed) return;
+    if (!this._toldSlow && (r.scale < this._lastScale || r.renderDistance < this._lastDistance)) {
+      this._toldSlow = true;
+      g.toast('Running slowly — easing the picture quality to keep it smooth. Settings → Performance to change this.', 'warn');
+    }
+    this._lastScale = r.scale; this._lastDistance = r.renderDistance;
     g.engine.setRenderScale(r.scale);
     // The governor lowers the effective distance without rewriting the player's
     // setting, so the choice survives a restart; World reads this override.
