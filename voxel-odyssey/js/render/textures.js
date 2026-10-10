@@ -325,9 +325,9 @@ const RECIPES = {
     for (let i = 2; i < s / 3; i++) t.set(i + 2, i, 255, 255, 255, 70);
   },
 
-  leaves: (t) => makeLeaves(t, baseColor('leaves', [64, 124, 56])),
-  birch_leaves: (t) => makeLeaves(t, baseColor('birch_leaves', [120, 158, 86])),
-  pine_leaves: (t) => makeLeaves(t, baseColor('pine_leaves', [40, 92, 64])),
+  leaves: (t) => makeLeaves(t, baseColor('leaves', [84, 152, 52])),
+  birch_leaves: (t) => makeLeaves(t, baseColor('birch_leaves', [132, 178, 88])),
+  pine_leaves: (t) => makeLeaves(t, baseColor('pine_leaves', [54, 116, 76])),
 
   glowstone: (t) => {
     const c = baseColor('glowstone', [238, 214, 120]);
@@ -465,7 +465,14 @@ function makeRings(t, c) {
 }
 
 function makeLeaves(t, c) {
-  t.mottle(c, 0.20);
+  t.mottle(c, 0.28);
+  // Sunlit leaf clusters: scattered lighter texels so the canopy has a
+  // readable pattern at a distance instead of one flat dark green.
+  for (let i = 0; i < t.size * t.size * 0.16; i++) {
+    const x = (t.rand() * t.size) | 0, y = (t.rand() * t.size) | 0;
+    const p = t.get(x, y);
+    if (p[3] > 0) t.set(x, y, clamp255(p[0] * 1.32 + 8), clamp255(p[1] * 1.28 + 8), clamp255(p[2] * 1.2), p[3]);
+  }
   // A few gaps so canopy silhouettes read as foliage rather than solid cubes.
   // Kept sparse on purpose: leaves are drawn by the alpha-tested material, so
   // every transparent texel is a real hole you can see sky through, and a high

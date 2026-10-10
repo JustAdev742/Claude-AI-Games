@@ -185,7 +185,7 @@ register(ID.LOG, 'log', {
   hardness: 1.6, tool: 'axe', flammable: true, walkSound: 'wood',
 });
 register(ID.LEAVES, 'leaves', {
-  name: 'Oak Leaves', color: rgb(64, 124, 56), transparent: true, opacity: 2,
+  name: 'Oak Leaves', color: rgb(84, 152, 52), transparent: true, opacity: 2,
   hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_oak', walkSound: 'grass',
 });
 register(ID.PLANKS, 'planks', {
@@ -261,7 +261,7 @@ register(ID.BIRCH_LOG, 'birch_log', {
   hardness: 1.6, tool: 'axe', flammable: true, walkSound: 'wood',
 });
 register(ID.BIRCH_LEAVES, 'birch_leaves', {
-  name: 'Birch Leaves', color: rgb(120, 158, 86), transparent: true, opacity: 2,
+  name: 'Birch Leaves', color: rgb(132, 178, 88), transparent: true, opacity: 2,
   hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_birch', walkSound: 'grass',
 });
 register(ID.PINE_LOG, 'pine_log', {
@@ -269,7 +269,7 @@ register(ID.PINE_LOG, 'pine_log', {
   hardness: 1.6, tool: 'axe', flammable: true, walkSound: 'wood',
 });
 register(ID.PINE_LEAVES, 'pine_leaves', {
-  name: 'Pine Needles', color: rgb(40, 92, 64), transparent: true, opacity: 2,
+  name: 'Pine Needles', color: rgb(54, 116, 76), transparent: true, opacity: 2,
   hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_pine', walkSound: 'grass',
 });
 register(ID.FLOWER_RED, 'flower_red', {

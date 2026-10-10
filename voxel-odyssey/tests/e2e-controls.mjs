@@ -303,7 +303,10 @@ async function main() {
     });
     // Clicking the game itself IS the request for capture.
     await a.page.mouse.click(512, 320);
-    await sleep(250);
+    // Lock is granted asynchronously (pointerlockchange fires a task later),
+    // and a software-rendered frame can take long enough that a fixed short
+    // sleep is racy — wait for the state instead of guessing a duration.
+    await a.page.waitForFunction(() => GAME.input.locked, null, { timeout: 4000 }).catch(() => {});
     const afterCanvasClick = await a.page.evaluate(() => ({
       released: GAME.input.cursorReleased, locked: GAME.input.locked,
     }));

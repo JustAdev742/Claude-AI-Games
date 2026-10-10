@@ -22,7 +22,6 @@
 
 import * as THREE from 'three';
 import { lerp, clamp, clamp01, mixColor, TAU, smoothstep } from '../core/utils.js';
-import { WATER_LEVEL } from '../world/constants.js';
 
 // A full day/night cycle in seconds of (scaled) game time.
 const DAY_LENGTH = 600;            // ~10 minutes
@@ -55,6 +54,21 @@ const KEYS = [
   { t: 0.80, top: [0.08, 0.08, 0.22], horizon: [0.22, 0.12, 0.20], sun: [0.55, 0.40, 0.48], sunI: 0.10, hemiSky: [0.18, 0.14, 0.24], hemiGround: [0.06, 0.06, 0.08], hemiI: 0.30, light: 0.12 },
   { t: 1.00, top: [0.02, 0.03, 0.10], horizon: [0.05, 0.06, 0.14], sun: [0.30, 0.36, 0.62], sunI: 0.04, hemiSky: [0.06, 0.08, 0.18], hemiGround: [0.02, 0.03, 0.05], hemiI: 0.18, light: 0.04 },
 ];
+
+// Cloud layer: a CLOUD_GRID x CLOUD_GRID bitmap of CLOUD_CELL-block slabs.
+const CLOUD_GRID = 64;
+const CLOUD_CELL = 14;
+const CLOUD_THICK = 5;
+const CLOUD_HEIGHT = 112;     // world y of the cloud base
+const CLOUD_DRIFT = 2.4;      // blocks per second toward +x
+
+// sRGB-ish display value -> linear light.
+const lin = (v) => Math.pow(v < 0 ? 0 : v, 2.2);
+
+// Cold blue floors blended in at night (linear light).
+const NIGHT_AMBIENT_SKY = [0.010, 0.016, 0.040];
+const NIGHT_AMBIENT_GROUND = [0.004, 0.006, 0.014];
+const NIGHT_MOONLIGHT = [0.020, 0.030, 0.062];
 
 // A reusable, mutable palette object so per-frame sampling is allocation-free.
 const SAMPLE = {
@@ -100,6 +114,14 @@ export class Sky {
     // Terrain lighting state consumed by the voxel shader each frame.
     this._terrainTint = [1, 1, 1];
     this._terrainDaylight = 1;
+    // Linear-light inputs for the terrain shader (see render/material.js):
+    // hemisphere ambient for upward / downward facing surfaces, and the colour
+    // and strength of the direct sun (or moon).
+    this._ambSky = [0.3, 0.4, 0.6];
+    this._ambGround = [0.1, 0.1, 0.1];
+    this._sunLight = [1, 1, 1];
+    this._horizonLin = [0.4, 0.6, 1];
+    this._zenithLin = [0.1, 0.3, 0.8];
     this._elapsed = 0;             // seconds, drives foliage wind sway
 
     this._initialized = false;
@@ -275,50 +297,91 @@ export class Sky {
   }
 
   _buildClouds() {
-    // A handful of large, low-poly translucent planes drifting overhead. They
-    // live well above the player so they read as a cloud layer without needing
-    // volumetric tricks. Only created when fancyGraphics is on.
+    // Blocky voxel clouds in the classic style: a tileable noise bitmap becomes
+    // a layer of slabs, only the faces you could see are meshed, and the whole
+    // layer is one geometry drawn nine times (a 3x3 tiling) so it can scroll
+    // forever. The layer is fixed in the WORLD, not the camera, so walking
+    // gives proper parallax — see _updateClouds. Only built with fancyGraphics.
     this.cloudGroup = new THREE.Group();
     this.cloudGroup.frustumCulled = false;
-    const baseY = Math.max(WATER_LEVEL + 90, 130);
+
+    const N = CLOUD_GRID, CELL = CLOUD_CELL, H = CLOUD_THICK;
+    // Tileable value noise: lattices wrap, so the bitmap has no seam.
+    let seed = 0x51ed270b >>> 0;
+    const rnd = () => {
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed / 4294967296;
+    };
+    const octaves = [[6, 0.55], [12, 0.30], [24, 0.15]].map(([size, weight]) => {
+      const lat = new Float32Array(size * size);
+      for (let i = 0; i < lat.length; i++) lat[i] = rnd();
+      return { size, weight, lat };
+    });
+    const sample = (x, z) => {
+      let v = 0;
+      for (const o of octaves) {
+        const fx = (x / N) * o.size, fz = (z / N) * o.size;
+        const x0 = Math.floor(fx), z0 = Math.floor(fz);
+        const tx = fx - x0, tz = fz - z0;
+        const sx = tx * tx * (3 - 2 * tx), sz = tz * tz * (3 - 2 * tz);
+        const at = (i, j) => o.lat[(((j % o.size) + o.size) % o.size) * o.size + (((i % o.size) + o.size) % o.size)];
+        const top = at(x0, z0) + (at(x0 + 1, z0) - at(x0, z0)) * sx;
+        const bot = at(x0, z0 + 1) + (at(x0 + 1, z0 + 1) - at(x0, z0 + 1)) * sx;
+        v += (top + (bot - top) * sz) * o.weight;
+      }
+      return v;
+    };
+    const filled = new Uint8Array(N * N);
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) filled[z * N + x] = sample(x, z) > 0.605 ? 1 : 0;
+    const at = (x, z) => filled[(((z % N) + N) % N) * N + (((x % N) + N) % N)];
+
+    const pos = [], col = [], idx = [];
+    const quad = (a, b2, c, d, shade) => {
+      const base = pos.length / 3;
+      for (const v of [a, b2, c, d]) { pos.push(v[0], v[1], v[2]); col.push(shade, shade, shade); }
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    for (let z = 0; z < N; z++) {
+      for (let x = 0; x < N; x++) {
+        if (!at(x, z)) continue;
+        const x0 = x * CELL, x1 = x0 + CELL, z0 = z * CELL, z1 = z0 + CELL;
+        quad([x0, H, z1], [x1, H, z1], [x1, H, z0], [x0, H, z0], 1.0);          // top
+        quad([x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1], 0.8);          // underside
+        if (!at(x + 1, z)) quad([x1, 0, z1], [x1, 0, z0], [x1, H, z0], [x1, H, z1], 0.82);
+        if (!at(x - 1, z)) quad([x0, 0, z0], [x0, 0, z1], [x0, H, z1], [x0, H, z0], 0.82);
+        if (!at(x, z + 1)) quad([x0, 0, z1], [x1, 0, z1], [x1, H, z1], [x0, H, z1], 0.9);
+        if (!at(x, z - 1)) quad([x1, 0, z0], [x0, 0, z0], [x0, H, z0], [x1, H, z0], 0.9);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
 
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
+      vertexColors: true,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.85,
       depthWrite: false,
       depthTest: true,       // a hill in front of a cloud must hide it
       fog: true,             // clouds DO catch fog so they fade with distance
-      side: THREE.DoubleSide,
     });
     this.cloudMat = mat;
 
-    // Deterministic placement so clouds are consistent between runs.
-    let s = 0x1234abcd >>> 0;
-    const rnd = () => {
-      s ^= s << 13; s >>>= 0;
-      s ^= s >> 17;
-      s ^= s << 5; s >>>= 0;
-      return (s >>> 0) / 4294967296;
-    };
-    const COUNT = 14;
-    for (let i = 0; i < COUNT; i++) {
-      const w = 60 + rnd() * 120;
-      const d = 50 + rnd() * 110;
-      const geo = new THREE.PlaneGeometry(w, d, 1, 1);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;   // lie flat
-      mesh.position.set(
-        (rnd() - 0.5) * 900,
-        baseY + (rnd() - 0.5) * 40,
-        (rnd() - 0.5) * 900
-      );
-      mesh.frustumCulled = false;
-      // Per-cloud drift speed (slow).
-      mesh.userData.drift = 2 + rnd() * 4;
-      this.cloudGroup.add(mesh);
-      this.clouds.push(mesh);
+    const span = N * CELL;
+    for (let tz = -1; tz <= 1; tz++) {
+      for (let tx = -1; tx <= 1; tx++) {
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(tx * span, 0, tz * span);
+        mesh.frustumCulled = false;
+        this.cloudGroup.add(mesh);
+        this.clouds.push(mesh);
+      }
     }
+    this._cloudDrift = 0;
     this.group.add(this.cloudGroup);
   }
 
@@ -498,6 +561,21 @@ export class Sky {
     // Keep a floor under daylight so night is dim, not pitch black outdoors.
     this._terrainDaylight = 0.16 + 0.84 * day;
 
+    // Linear-light terms for the shader. The palette is authored as display
+    // colours, so linearise each channel; the shader lights in linear space
+    // and tone-maps afterwards, which is what keeps dark albedos (leaves,
+    // water) from collapsing to black under multiplied-down display values.
+    // Night is not allowed to fall to zero: a cold blue floor stands in for
+    // moon- and starlight so the ground stays readable.
+    const night = clamp01(smoothstep(0.40, 0.04, day));
+    for (let i = 0; i < 3; i++) {
+      this._ambSky[i] = lin(p.hemiSky[i]) * p.hemiI * 0.80 + NIGHT_AMBIENT_SKY[i] * night;
+      this._ambGround[i] = lin(p.hemiGround[i]) * p.hemiI * 0.85 + NIGHT_AMBIENT_GROUND[i] * night;
+      this._sunLight[i] = lin(p.sun[i]) * p.sunI * 1.2 + NIGHT_MOONLIGHT[i] * night;
+      this._horizonLin[i] = lin(p.horizon[i]);
+      this._zenithLin[i] = lin(p.top[i]);
+    }
+
     if (this.hemi) {
       setColor(this.hemi.color, p.hemiSky);
       setColor(this.hemi.groundColor, p.hemiGround);
@@ -564,24 +642,28 @@ export class Sky {
   }
 
   _updateClouds(dt, cam) {
-    if (!this.clouds.length) return;
-    // Drift clouds slowly along +X and wrap them around the player so the layer
-    // is endless. The cloudGroup is parented under `group` (camera-centered),
-    // so positions here are relative to the camera — we wrap in that space.
-    const WRAP = 1000;
-    for (let i = 0; i < this.clouds.length; i++) {
-      const c = this.clouds[i];
-      c.position.x += c.userData.drift * dt;
-      if (c.position.x > WRAP * 0.5) c.position.x -= WRAP;
-    }
-    // Tint clouds: brighter/whiter by day, grayer and dimmer at night.
+    if (!this.clouds.length || !this.cloudGroup) return;
+    // The sky rig is glued to the camera, so to make the layer sit in the
+    // world (and give real parallax as you walk) its position is the world
+    // offset of the pattern MINUS the camera position, wrapped onto the tile
+    // that currently contains the player. The 3x3 tiling hides the wrap.
+    const span = CLOUD_GRID * CLOUD_CELL;
+    this._cloudDrift = ((this._cloudDrift || 0) + CLOUD_DRIFT * dt) % span;
+    const cx = cam ? cam.position.x : 0, cy = cam ? cam.position.y : 0, cz = cam ? cam.position.z : 0;
+    const wrap = (v) => v - Math.floor(v / span + 0.5) * span;     // into [-span/2, span/2)
+    this.cloudGroup.position.set(
+      wrap(this._cloudDrift - cx) - span / 2,
+      CLOUD_HEIGHT - cy,
+      wrap(-cz) - span / 2
+    );
+    // Brighter and warmer by day (and rose-gold at dusk), dim and cold by night.
     if (this.cloudMat) {
       const lvl = this._lightLevel;
-      // Brighter and whiter by day, grayer/dimmer at night.
-      const g = lerp(0.45, 1.0, lvl);
-      this.cloudMat.color.setRGB(g, g, g * 1.0);
-      this.cloudMat.opacity = lerp(0.18, 0.6, lvl);
-      this.cloudMat.visible = this.cloudMat.opacity > 0.02;
+      const k = lerp(0.16, 1.0, clamp01(lvl * 1.15));
+      const warm = SAMPLE.sun;
+      this.cloudMat.color.setRGB(k * lerp(0.80, warm[0], 0.65), k * lerp(0.84, warm[1], 0.65), k * lerp(0.95, warm[2], 0.65));
+      this.cloudMat.opacity = lerp(0.35, 0.86, clamp01(lvl * 1.5));
+      this.cloudMat.visible = true;
     }
   }
 
@@ -613,11 +695,22 @@ export class Sky {
     // sun — flip rather than letting terrain shade toward a sun that is
     // underground.
     if (s.y < 0) s.multiplyScalar(-1);
+    // The visible sun crosses the sky in the x/y plane, which would leave
+    // north- and south-facing walls permanently out of direct light. Tilt the
+    // LIGHT (not the disc) a little toward +z so every wall catches the sun at
+    // some point in the day.
+    s.z += 0.32;
+    s.normalize();
     return {
       daylight: this._terrainDaylight,
       skyTint: this._terrainTint,
       time: this._elapsed || 0,
       sunDir: s,
+      ambSky: this._ambSky,
+      ambGround: this._ambGround,
+      sunLight: this._sunLight,
+      horizon: this._horizonLin,
+      zenith: this._zenithLin,
     };
   }
 

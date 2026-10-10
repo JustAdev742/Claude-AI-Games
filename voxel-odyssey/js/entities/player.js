@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import Blocks, { ID } from '../world/blocks.js';
-import { buildBlockGeometry, setBlockGeometryLight } from '../render/blockModel.js';
+import { buildBlockGeometry, buildSpriteGeometry, buildBoxGeometry, setBlockGeometryLight } from '../render/blockModel.js';
 import Items from '../items/items.js';
 import { clamp, lerp, damp, DEG2RAD } from '../core/utils.js';
 
@@ -123,6 +123,7 @@ export class Player {
 
     // ---- viewmodel ----
     this._viewmodel = null;
+    this._vmGeoms = [];
     this._viewmodelKey = undefined;
 
     // ---- misc ----
@@ -1209,46 +1210,72 @@ export class Player {
       this._disposeObject(this._viewmodel);
       this._viewmodel = null;
     }
-    this._vmBlockGeom = null;
+    this._vmGeoms = [];
     if (!itemKey) return;
 
-    const group = new THREE.Group();
-    const item = Items.get(itemKey);
-
     const world = this.game.world;
-    if (item && Items.isPlaceable(itemKey) && item.blockId !== undefined
-        && world && world.matViewmodel) {
-      // Build the held block through the SAME geometry format and the SAME
-      // shader the terrain uses, rather than approximating it with a flat
-      // coloured box. It therefore gets the texture atlas, per-face shading
-      // and the voxel light curve for free, and cannot drift from the world.
-      const geom = buildBlockGeometry(item.blockId, world.atlas, 0.42);
-      const cube = new THREE.Mesh(geom, world.matViewmodel);
-      cube.frustumCulled = false;   // it is always in front of the camera
-      group.add(cube);
-      this._vmBlockGeom = geom;
-    } else {
-      // Show a generic stick/tool sliver colored by the item.
-      let col = [0.7, 0.7, 0.72];
-      if (item && item.icon && item.icon.color) col = item.icon.color;
-      const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(col[0], col[1], col[2]) });
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), mat);
-      bar.rotation.z = -0.5;
-      group.add(bar);
-    }
+    const mat = world && world.matViewmodel;
+    if (!mat) return;
 
-    // Tools/items still use a Lambert sliver, so they need a light. A held
-    // BLOCK does not: it is lit by the voxel shader from baked light, exactly
-    // like the terrain.
-    if (!this._vmBlockGeom) {
-      const light = new THREE.DirectionalLight(0xffffff, 0.9);
-      light.position.set(0.5, 1, 1);
-      group.add(light);
-      group.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const item = Items.get(itemKey);
+    const group = new THREE.Group();
+    // The holder carries the static pose for this kind of item; the group
+    // above it carries the per-frame bob / swing / camera transform.
+    const holder = new THREE.Group();
+    group.add(holder);
+
+    const blockDef = item && item.blockId !== undefined ? Blocks.get(item.blockId) : null;
+    const isCube = !!blockDef && blockDef.render !== 'cross' && blockDef.render !== 'air';
+    let geom;
+    if (isCube) {
+      // The held block goes through the SAME geometry format and shader as the
+      // terrain, so it gets the texture atlas and the light curve for free.
+      geom = buildBlockGeometry(item.blockId, world.atlas, 0.3);
+      holder.rotation.set(0.32, 0.72, 0.02);
+      holder.position.set(0, 0, 0);
+    } else {
+      // Tools, food, materials and plants: the item's inventory icon, extruded
+      // one voxel deep (the same trick first-person Minecraft uses).
+      const px = this._itemPixels(itemKey, 16);
+      if (!px) return;
+      const tool = item && item.category === 'tool';
+      geom = buildSpriteGeometry(px, 16, 16, tool ? 0.52 : 0.42);
+      if (tool) {
+        // The icon has its handle bottom-left; the right hand holds it
+        // handle bottom-right, head up and toward the middle of the screen
+        // (see _itemPixels, which mirrors it), turned a little so you see its
+        // edge as well as its face.
+        holder.rotation.set(-0.08, 0.42, -0.3);
+        holder.position.set(-0.02, 0.1, 0);
+      } else {
+        holder.rotation.set(0.05, 0.4, -0.1);
+        holder.position.set(0, 0.04, 0);
+      }
     }
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.frustumCulled = false;   // always in front of the camera
+    holder.add(mesh);
+    this._vmGeoms.push(geom);
 
     this._viewmodel = group;
     vmScene.add(group);
+  }
+
+  // Rasterise an item's inventory icon to RGBA pixels. Returns null where
+  // there is no canvas (tests running under Node).
+  _itemPixels(itemKey, n) {
+    if (typeof document === 'undefined') return null;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = n;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    // Mirror horizontally: icons are drawn for a left-leaning grip, and the
+    // right hand holds them the other way round.
+    ctx.translate(n, 0);
+    ctx.scale(-1, 1);
+    Items.drawIcon(ctx, itemKey, n);
+    return ctx.getImageData(0, 0, n, n).data;
   }
 
   _updateViewmodel(dt) {
@@ -1256,7 +1283,7 @@ export class Player {
 
     // Light the held block from wherever the player is standing, so walking
     // into a cave darkens it along with the walls.
-    if (this._vmBlockGeom) {
+    if (this._vmGeoms && this._vmGeoms.length) {
       const world = this.game.world;
       let sky = 1, blk = 0;
       if (world && typeof world.getLightByte === 'function') {
@@ -1268,7 +1295,7 @@ export class Player {
         sky = ((packed >> 4) & 0x0f) / 15;
         blk = (packed & 0x0f) / 15;
       }
-      setBlockGeometryLight(this._vmBlockGeom, sky, blk);
+      for (const g of this._vmGeoms) setBlockGeometryLight(g, sky, blk);
     }
 
     const bob = this._bobAmount;
@@ -1291,7 +1318,7 @@ export class Player {
     const a = Math.sin(Math.min(1, Math.max(this._swing, chop)) * Math.PI);
 
     // Base position in camera-local-ish space (viewmodel scene shares the camera).
-    const baseX = 0.55, baseY = -0.45, baseZ = -0.9;
+    const baseX = 0.5, baseY = -0.42, baseZ = -0.82;
     const idleBob = Math.sin(t * 2) * 0.01 * (1 - bob) + Math.sin(t * 9) * 0.015 * bob;
 
     // The swing is an arc toward the crosshair: in, down, and across, with a
@@ -1312,7 +1339,7 @@ export class Player {
       this._viewmodel.position.add(cam.position);
       this._viewmodel.quaternion.copy(cam.quaternion);
       this._viewmodel.rotateX(-a * 1.25);
-      this._viewmodel.rotateY(0.3 + a * 0.32);
+      this._viewmodel.rotateY(a * 0.32);
       this._viewmodel.rotateZ(-a * 0.28);
     }
   }

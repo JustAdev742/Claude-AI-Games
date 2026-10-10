@@ -16,7 +16,7 @@
    ========================================================================= */
 
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ, CHUNK_VOL, localIndex } from './constants.js';
-import Blocks, { ID, FACES, FACE_SHADE, FACE_UVS } from './blocks.js';
+import Blocks, { ID, FACES, FACE_UVS } from './blocks.js';
 import { tintVariation } from '../core/utils.js';
 
 /* =========================================================================
@@ -341,7 +341,10 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
 
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
-    const shade = FACE_SHADE[f];
+    // Directional shading (top brighter than sides, sides by sun angle) is the
+    // fragment shader's job now — it has the real normal and the real sun —
+    // so vertices carry no baked face shade.
+    const shade = 1;
     const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
 
     // The shader computes base = texture * vColor. When a texture supplies the
@@ -379,7 +382,7 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     if (Blocks.isLiquid(neighbor)) continue;
     if (!Blocks.shouldRenderFace(id, neighbor)) continue;
 
-    const shade = FACE_SHADE[f];
+    const shade = 1;
     const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
     const base = layer >= 0 ? WHITE : Blocks.faceColor(id, f);
     const r = base[0] * shade;

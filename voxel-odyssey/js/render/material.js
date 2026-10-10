@@ -20,6 +20,16 @@
    sun, blocklight is a fixed warm glow that survives midnight. Collapsing
    them to one value would make torches go out at night.
 
+   LIGHTING IS DONE IN LINEAR SPACE
+   --------------------------------
+   Texture and vertex colours are display (sRGB-ish) values. Multiplying those
+   directly by light levels compounds the darkening — a mid-green leaf texture
+   (0.25) times a morning light (0.5) times a side-face shade (0.8) lands near
+   0.1, i.e. black. So the fragment shader converts albedo to linear light,
+   adds hemisphere ambient + a directional sun/moon + torch light there, then
+   tone-maps and re-encodes for display. The sky supplies the ambient and sun
+   colours as ready-made linear uniforms (see Sky.getTerrainLight).
+
    Also supports an optional texture atlas (see atlas.js). Until one is bound
    the shader falls back to flat vertex colour, so the renderer works
    identically with or without a resource pack loaded.
@@ -56,6 +66,7 @@ const VERT = /* glsl */`
 
   uniform float uTime;
   uniform float uWaveStrength;  // >0 makes foliage/liquids sway
+  uniform float uViewmodel;     // 1 = held item: light it from a fixed direction
 
   #include <fog_pars_vertex>
 
@@ -69,7 +80,10 @@ const VERT = /* glsl */`
     // normalMatrix because normalMatrix goes to VIEW space, and the sun
     // direction uniform is a world-space vector. Chunk meshes only translate
     // (mat3 = identity); the held-item viewmodel actually rotates.
-    vNormal = mat3(modelMatrix) * normal;
+    // The held item is rotated with the camera every frame, so a world-space
+    // normal would make its shading swim as you look around; its object-space
+    // normal is stable and is lit by a fixed light instead.
+    vNormal = uViewmodel > 0.5 ? normal : mat3(modelMatrix) * normal;
 
     vec3 pos = position;
 
@@ -115,17 +129,51 @@ const FRAG = /* glsl */`
   // selects the layer. See render/atlas.js.
   uniform sampler2DArray uAtlas;
   uniform float uHasAtlas;
-  uniform vec3 uSkyTint;      // colour sunlight contributes (warm at dusk)
   uniform vec3 uBlockTint;    // colour torches contribute (fixed warm orange)
   uniform vec3 uSunDir;       // world-space direction toward the sun/moon
-  uniform float uDaylight;    // 0 = midnight, 1 = noon
-  uniform float uAmbient;     // floor so caves are dark but not unreadable
+  uniform vec3 uAmbSky;       // linear ambient light from straight above
+  uniform vec3 uAmbGround;    // linear ambient light bounced up from below
+  uniform vec3 uSunLight;     // linear colour * strength of direct sun/moon
+  uniform vec3 uHorizon;      // linear sky colour at the horizon
+  uniform vec3 uZenith;       // linear sky colour overhead
+  uniform float uExposure;
+  uniform float uAmbient;     // linear floor so caves are dark but not unreadable
+  uniform float uTime;
   uniform float uOpacity;
   uniform float uAlphaTest;
+  uniform float uIsWater;     // 1 = shade as a reflective water surface
+  uniform float uViewmodel;   // 1 = held item: fixed light direction
 
   ${LIGHT_CURVE_GLSL}
 
   #include <fog_pars_fragment>
+
+  vec3 toLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+
+  // Extended Reinhard: keeps shadows and mid-tones where they are (no filmic
+  // toe to crush the dark end) and rolls highlights off smoothly instead of
+  // clipping, so snow and sunlit sand stay readable at noon.
+  vec3 toneMap(vec3 c) {
+    const float W2 = 6.0;   // white point squared
+    return c * (1.0 + c / W2) / (1.0 + c);
+  }
+
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  // Slope (d height / dx, d height / dz) of the water surface: three layers of
+  // travelling ripples at different scales and speeds, so the surface never
+  // shows an obvious repeat or a single direction of travel.
+  vec2 waterSlope(vec2 p, float t) {
+    vec2 g = vec2(0.0);
+    g += vec2(cos(p.x * 1.30 + p.y * 0.70 + t * 1.10), cos(p.y * 1.10 + p.x * 0.50 - t * 0.90)) * 0.085;
+    g += vec2(cos(p.x * 3.10 - t * 1.90), cos(p.y * 2.70 + p.x * 1.30 + t * 1.60)) * 0.045;
+    g += vec2(cos(p.x * 7.30 + p.y * 3.10 + t * 2.70), cos(p.y * 6.10 - p.x * 2.90 - t * 2.30)) * 0.020;
+    return g;
+  }
 
   void main() {
     vec4 base = vec4(vColor, 1.0);
@@ -138,32 +186,73 @@ const FRAG = /* glsl */`
       base = vec4(tex.rgb * vColor, tex.a);
     }
 
-    // --- combine the two light channels -----------------------------------
-    float sky = lightCurve(vLight.x) * uDaylight;
-    float blk = lightCurve(vLight.y);
+    vec3 albedo = toLinear(base.rgb);
 
-    // Directional sun term. Only the SKY channel gets it — torchlight is
-    // omnidirectional. Faces turned toward the sun brighten through the day
-    // as it arcs overhead; the 0.72 floor keeps away-facing sides lit by sky
-    // scatter rather than pitch black (the baked flood-fill already handles
-    // true occlusion). Back faces of double-sided foliage flip the normal so
-    // both sides of a cross-quad read identically.
+    // Baked light: how much sky / torch reaches this face (0..1).
+    float skyVis = lightCurve(vLight.x);
+    float blkVis = lightCurve(vLight.y);
+
+    // Back faces of double-sided foliage flip the normal so both sides of a
+    // cross-quad read identically.
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
-    float ndl = 0.72 + 0.28 * max(dot(N, uSunDir), 0.0);
 
-    vec3 skyContrib = uSkyTint * sky * ndl;
-    vec3 blkContrib = uBlockTint * blk;
+    vec3 L = uSunDir;
+    if (uViewmodel > 0.5) L = normalize(vec3(0.45, 0.8, 0.4));
 
-    // Take the stronger channel and add a fraction of the weaker one. A plain
-    // sum would blow out to white where a torch sits in daylight; a plain max
-    // would make torches invisible outdoors. This keeps both readable.
-    vec3 light = max(skyContrib, blkContrib) + min(skyContrib, blkContrib) * 0.32;
-    light = max(light, vec3(uAmbient));
+    // Water gets a rippled normal on its top surface; everything else shades
+    // from its face normal.
+    vec3 Nl = N;
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    if (uIsWater > 0.5 && N.y > 0.5) {
+      vec2 g = waterSlope(vWorldPos.xz, uTime);
+      Nl = normalize(vec3(-g.x, 1.0, -g.y));
+    }
 
-    vec3 rgb = base.rgb * light * vAO;
+    // --- sky light: hemisphere ambient + direct sun ------------------------
+    float up = Nl.y * 0.5 + 0.5;
+    vec3 hemi = mix(uAmbGround, uAmbSky, up);
+    float ndl = max(dot(Nl, L), 0.0);
+    // Direct light only reaches cells that can see most of the sky, which is a
+    // cheap stand-in for a shadow: under a canopy or an overhang the baked sky
+    // level drops and the sun term fades out while the ambient survives.
+    float sunVis = smoothstep(0.50, 0.92, skyVis);
+    vec3 skyLight = hemi * skyVis + uSunLight * ndl * sunVis;
 
-    gl_FragColor = vec4(rgb, base.a * uOpacity);
+    // --- torch light --------------------------------------------------------
+    vec3 blkLight = uBlockTint * blkVis * 1.7;
+
+    vec3 light = max(skyLight + blkLight, vec3(uAmbient));
+    // Vertex ambient occlusion: the mesher's 0.7..1 range reads faint once the
+    // light is linear, so square it to get properly dark creases and corners.
+    float ao = vAO * vAO;
+    vec3 lit = albedo * light * ao;
+    float alpha = base.a * uOpacity;
+
+    if (uIsWater > 0.5) {
+      // Fresnel: look straight down and you see through the water; look along
+      // it and you see the sky in it.
+      float cosT = max(dot(Nl, V), 0.0);
+      float fres = 0.03 + 0.97 * pow(1.0 - cosT, 4.0);
+      vec3 R = reflect(-V, Nl);
+      vec3 sky = mix(uHorizon, uZenith, pow(clamp(R.y, 0.0, 1.0), 0.55));
+      lit = mix(lit, sky * (0.35 + 0.65 * sunVis), fres * (N.y > 0.5 ? 1.0 : 0.35));
+      // Sun / moon glint on the ripples.
+      float spec = pow(max(dot(R, L), 0.0), 240.0);
+      lit += uSunLight * spec * 3.0 * sunVis * step(0.0, L.y);
+      alpha = clamp(mix(alpha, 0.97, fres), 0.0, 1.0);
+    }
+
+    lit *= uExposure;
+    vec3 mapped = toneMap(lit);
+    // A touch of saturation back: tone mapping pulls everything toward grey.
+    float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+    mapped = mix(vec3(luma), mapped, 1.12);
+    vec3 rgb = pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2));
+    // Sub-LSB noise breaks up banding in the long dark gradients.
+    rgb += (hash12(gl_FragCoord.xy) - 0.5) / 255.0;
+
+    gl_FragColor = vec4(rgb, alpha);
 
     #include <fog_fragment>
   }
@@ -187,10 +276,18 @@ export function createSharedUniforms() {
     uAtlas: { value: makeFallbackArrayTexture() },
     uHasAtlas: { value: 0 },
     uSkyTint: { value: new THREE.Color(1, 1, 1) },
-    uBlockTint: { value: new THREE.Color(1.0, 0.78, 0.52) },
+    // Linear light: torchlight is warm orange, strong enough to read in a
+    // cave and to hold its own against dusk ambient.
+    uBlockTint: { value: new THREE.Color(1.0, 0.55, 0.22) },
     uSunDir: { value: new THREE.Vector3(0.35, 0.85, 0.4).normalize() },
+    uAmbSky: { value: new THREE.Color(0.30, 0.45, 0.70) },
+    uAmbGround: { value: new THREE.Color(0.12, 0.11, 0.09) },
+    uSunLight: { value: new THREE.Color(1.3, 1.25, 1.1) },
+    uHorizon: { value: new THREE.Color(0.35, 0.58, 1.0) },
+    uZenith: { value: new THREE.Color(0.06, 0.24, 0.80) },
+    uExposure: { value: 1.15 },
     uDaylight: { value: 1 },
-    uAmbient: { value: 0.035 },
+    uAmbient: { value: 0.006 },
     uTime: { value: 0 },
   };
 }
@@ -209,6 +306,8 @@ export function createVoxelMaterials(shared) {
         uOpacity: { value: 1 },
         uAlphaTest: { value: 0.5 },
         uWaveStrength: { value: 0 },
+        uIsWater: { value: 0 },
+        uViewmodel: { value: 0 },
       },
     ]);
     // Point the merged block at the SHARED uniform objects (merge deep-clones,
@@ -238,8 +337,9 @@ export function createVoxelMaterials(shared) {
     depthWrite: false,          // don't occlude other transparent surfaces
     side: THREE.FrontSide,
   }, {
-    uOpacity: { value: 0.78 },
+    uOpacity: { value: 0.66 },
     uWaveStrength: { value: 0.35 },
+    uIsWater: { value: 1 },
   });
 
   // Foliage: alpha-tested rather than blended, so cross-quads sort correctly
@@ -266,6 +366,8 @@ export function createVoxelMaterials(shared) {
   const viewmodel = mk({
     name: 'voxel-viewmodel',
     fog: false,
+  }, {
+    uViewmodel: { value: 1 },
   });
 
   return { opaque, water, foliage, viewmodel };
@@ -286,9 +388,15 @@ export function updateVoxelUniforms(shared, skyState) {
   }
   if (typeof skyState.time === 'number') shared.uTime.value = skyState.time;
   if (skyState.sunDir) shared.uSunDir.value.copy(skyState.sunDir);
-  // Night keeps a faint blue ambient so open ground under moonlight still
-  // reads as ground, while enclosed caves (skylight 0) stay genuinely dark.
-  shared.uAmbient.value = 0.028 + 0.012 * d;
+  if (skyState.ambSky) shared.uAmbSky.value.setRGB(skyState.ambSky[0], skyState.ambSky[1], skyState.ambSky[2]);
+  if (skyState.ambGround) shared.uAmbGround.value.setRGB(skyState.ambGround[0], skyState.ambGround[1], skyState.ambGround[2]);
+  if (skyState.sunLight) shared.uSunLight.value.setRGB(skyState.sunLight[0], skyState.sunLight[1], skyState.sunLight[2]);
+  if (skyState.horizon) shared.uHorizon.value.setRGB(skyState.horizon[0], skyState.horizon[1], skyState.horizon[2]);
+  if (skyState.zenith) shared.uZenith.value.setRGB(skyState.zenith[0], skyState.zenith[1], skyState.zenith[2]);
+  // A faint linear floor so enclosed caves (skylight 0, no torch) stay barely
+  // readable rather than pure black; open ground at night is lit by the sky
+  // module's moonlight floor, not by this.
+  shared.uAmbient.value = 0.004 + 0.003 * d;
 }
 
 export default createVoxelMaterials;
