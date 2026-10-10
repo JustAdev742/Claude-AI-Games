@@ -533,7 +533,8 @@ export class World {
     const settings = (this.game && this.game.state && this.game.state.settings) || {};
     // The player's view distance, or lower while the adaptive governor is
     // shedding load (state.renderDistance accounts for both).
-    const rdSetting = this.game && this.game.state ? this.game.state.renderDistance : settings.renderDistance;
+    const live = this.game && this.game.state ? this.game.state.renderDistance : undefined;
+    const rdSetting = typeof live === 'number' ? live : settings.renderDistance;
     const rd = clamp((rdSetting | 0) || 6, 2, 12);
 
     const acx = Math.floor(anchor.x / CHUNK_SX);

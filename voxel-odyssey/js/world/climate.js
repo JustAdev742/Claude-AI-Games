@@ -69,8 +69,8 @@ export class Spline {
     if (x >= p[last][0]) return p[last][1];
 
     for (let i = 0; i < last; i++) {
-      const [x0, y0] = p[i];
-      const [x1, y1] = p[i + 1];
+      const a = p[i], b = p[i + 1];
+      const x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
       if (x > x1) continue;
       const span = x1 - x0;
       if (span <= 1e-9) return y1;
@@ -215,7 +215,12 @@ export class Climate {
    * @returns {{continent,erosion,weird,peaks,temp,humid,river,height,biome}}
    */
   sample(x, z) {
-    const key = `${x},${z}`;
+    // A numeric key: this runs once per column per call, and a template string
+    // allocates every time. Exact (collision-free) for |x|, |z| < 1,048,576;
+    // beyond that the string key keeps it correct.
+    const key = (x > -1048576 && x < 1048576 && z > -1048576 && z < 1048576)
+      ? (x + 1048576) * 2097152 + (z + 1048576)
+      : `${x},${z}`;
     const hit = this._cache.get(key);
     if (hit) return hit;
 
@@ -354,6 +359,21 @@ export const BIOME_TABLE = [
   { name: 'stony_peaks', continent: [0.3, 1], temp: [0.2, 1], humid: [-1, 1], erosion: [-1, -0.65] },
 ];
 
+// BIOME_TABLE as flat typed arrays (axis order: continent, temp, humid,
+// erosion), so selectBiome can scan it without allocating.
+const BIOME_FLAT = (() => {
+  const n = BIOME_TABLE.length;
+  const lo = new Float64Array(n * 4), hi = new Float64Array(n * 4), has = new Uint8Array(n * 4), oceanic = new Uint8Array(n);
+  BIOME_TABLE.forEach((e, i) => {
+    ['continent', 'temp', 'humid', 'erosion'].forEach((axis, k) => {
+      const r = e[axis];
+      if (r) { lo[i * 4 + k] = r[0]; hi[i * 4 + k] = r[1]; has[i * 4 + k] = 1; }
+    });
+    oceanic[i] = e.oceanic ? 1 : 0;
+  });
+  return { count: n, lo, hi, has, oceanic };
+})();
+
 /**
  * Choose a biome by nearest match in parameter space.
  *
@@ -363,36 +383,32 @@ export const BIOME_TABLE = [
  * at the edges of the space instead of falling off a cliff.
  */
 export function selectBiome(sample, opts) {
-  const axes = [
-    ['continent', sample.continent],
-    ['temp', sample.temp],
-    ['humid', sample.humid],
-    ['erosion', sample.erosion],
-  ];
   // Dry ground must never resolve to an ocean biome. Terrain height is decided
   // before the biome is (see worldgen._column), so the caller knows whether
   // this column ended up above sea level and can rule the oceanic entries out.
   // Land BELOW sea level stays eligible for everything: a river cutting
   // through a forest should still be forest, not ocean.
   const excludeOceanic = !!(opts && opts.excludeOceanic);
+  const sx0 = sample.continent, sx1 = sample.temp, sx2 = sample.humid, sx3 = sample.erosion;
+  const T = BIOME_FLAT, lo = T.lo, hi = T.hi, has = T.has;
 
-  let best = null;
+  let best = -1;
   let bestD = Infinity;
-
-  for (const entry of BIOME_TABLE) {
-    if (excludeOceanic && entry.oceanic) continue;
+  // Same arithmetic as the readable version, over flat typed arrays: this runs
+  // for every column of every generated chunk, and the object/array version
+  // allocated heavily.
+  for (let i = 0, n = T.count; i < n; i++) {
+    if (excludeOceanic && T.oceanic[i]) continue;
+    const o = i * 4;
     let d = 0;
-    for (const [axis, value] of axes) {
-      const range = entry[axis];
-      if (!range) continue;
-      if (value < range[0]) { const e = range[0] - value; d += e * e; }
-      else if (value > range[1]) { const e = value - range[1]; d += e * e; }
-    }
-    if (d < bestD) { bestD = d; best = entry; }
+    if (has[o]) { if (sx0 < lo[o]) { const e = lo[o] - sx0; d += e * e; } else if (sx0 > hi[o]) { const e = sx0 - hi[o]; d += e * e; } }
+    if (has[o + 1]) { if (sx1 < lo[o + 1]) { const e = lo[o + 1] - sx1; d += e * e; } else if (sx1 > hi[o + 1]) { const e = sx1 - hi[o + 1]; d += e * e; } }
+    if (has[o + 2]) { if (sx2 < lo[o + 2]) { const e = lo[o + 2] - sx2; d += e * e; } else if (sx2 > hi[o + 2]) { const e = sx2 - hi[o + 2]; d += e * e; } }
+    if (has[o + 3]) { if (sx3 < lo[o + 3]) { const e = lo[o + 3] - sx3; d += e * e; } else if (sx3 > hi[o + 3]) { const e = sx3 - hi[o + 3]; d += e * e; } }
+    if (d < bestD) { bestD = d; best = i; }
     if (d === 0) break;   // exact containment: nothing can beat it
   }
-
-  return best ? best.name : 'plains';
+  return best >= 0 ? BIOME_TABLE[best].name : 'plains';
 }
 
 export default Climate;

@@ -233,12 +233,12 @@ export class WorldGen {
      probes at two radii are enough to catch a real shoreline while costing a
      fraction of a full neighbourhood scan. */
   _nearWater(wx, wz) {
-    for (const r of [3, 6]) {
-      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r]]) {
-        if (this.heightAt(wx + dx, wz + dz) < SEA) return true;
-      }
-    }
-    return false;
+    // Unrolled (4 probes at radius 3, then at radius 6): this runs for shoreline
+    // columns of every chunk and the loop-over-arrays version allocated.
+    return this.heightAt(wx + 3, wz) < SEA || this.heightAt(wx - 3, wz) < SEA
+      || this.heightAt(wx, wz + 3) < SEA || this.heightAt(wx, wz - 3) < SEA
+      || this.heightAt(wx + 6, wz) < SEA || this.heightAt(wx - 6, wz) < SEA
+      || this.heightAt(wx, wz + 6) < SEA || this.heightAt(wx, wz - 6) < SEA;
   }
 
   /* --- chunk fill ------------------------------------------------------- */
@@ -449,12 +449,19 @@ export class WorldGen {
   // Deterministic ore placement. Depth bands gate which ores can appear; a
   // hashed roll + a small 3D-noise "vein" field clusters them into blobs.
   _oreFor(wx, y, wz, stoneId) {
+    const roll = hashCombine(this.seed, wx, y, wz ^ SALT.ore) / 4294967296;
+    const p = roll;
+
+    // The vein field only ever raises a threshold, and the highest any ore
+    // threshold can reach is 0.015 * 2.4. A roll above that can't hit an ore
+    // whatever the field says, so skip the (expensive) 3D noise for the ~96%
+    // of stone blocks that land there. Output is identical either way.
+    if (p >= 0.036) return p > 0.992 ? ID.GRAVEL : stoneId;
+
     // Vein coherence: ore tends to appear where this field is high, so hits
     // cluster into small veins instead of scattering one block at a time.
     const vein = this.caveNoise.perlin3(wx * 0.12 + 7.3, y * 0.12 + 11.7, wz * 0.12 + 3.1);
     const veinBoost = vein > 0.45 ? 2.4 : (vein > 0.2 ? 1.4 : 1.0);
-
-    const roll = hashCombine(this.seed, wx, y, wz ^ SALT.ore) / 4294967296;
 
     // Probabilities are per-block base rates, multiplied by veinBoost.
     // Bands (by absolute y, world height 0..79, sea ~28):
@@ -464,8 +471,6 @@ export class WorldGen {
     //   redstone: y 4..24   uncommon
     //   diamond:  y 3..16   rare
     //   emerald:  y 3..14   very rare (mountains favored, but global ok)
-    const p = roll;
-
     if (y >= 3 && y <= 16 && p < 0.0016 * veinBoost) return ID.DIAMOND_ORE;
     if (y >= 3 && y <= 14 && p < 0.0010 * veinBoost) return ID.EMERALD_ORE;
     if (y >= 4 && y <= 24 && p < 0.0046 * veinBoost) return ID.REDSTONE_ORE;
