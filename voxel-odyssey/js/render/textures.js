@@ -423,6 +423,9 @@ const RECIPES = {
     }
   },
 
+  sapling_oak: (t) => makeSapling(t, [72, 144, 56], [96, 172, 70]),
+  sapling_birch: (t) => makeSapling(t, [124, 168, 92], [150, 190, 112]),
+  sapling_pine: (t) => makeSapling(t, [44, 100, 68], [62, 126, 86], true),
   flower_red: (t) => makeFlower(t, [198, 62, 58]),
   flower_yellow: (t) => makeFlower(t, [226, 200, 62]),
   mushroom_red: (t) => {
@@ -511,6 +514,33 @@ function makeLeaves(t, c) {
     const x = (t.rand() * s) | 0, y = (t.rand() * s) | 0;
     const p = t.get(x, y);
     if (p[3] > 0) t.set(x, y, p[0] * 0.72, p[1] * 0.72, p[2] * 0.72, p[3]);
+  }
+}
+
+// A young tree: a short stem with a cluster of leaves (or, for pines, stacked
+// narrowing tiers).
+function makeSapling(t, dark, light, conifer = false) {
+  t.fill(0, 0, 0, 0);
+  const s = t.size, cx = (s / 2) | 0;
+  const trunk = [104, 78, 48];
+  for (let y = (s * 0.62) | 0; y < s - 1; y++) t.set(cx, y, trunk[0], trunk[1], trunk[2]);
+  const leaf = (x, y, light1) => {
+    const c = light1 ? light : dark;
+    t.set(x, y, c[0], c[1], c[2]);
+  };
+  if (conifer) {
+    for (let tier = 0; tier < 4; tier++) {
+      const y = (s * 0.18) + tier * 3, w = 1 + tier;
+      for (let x = cx - w; x <= cx + w; x++) leaf(x, y | 0, (x + tier) % 2 === 0);
+    }
+  } else {
+    for (let y = (s * 0.22) | 0; y < (s * 0.62) | 0; y++) {
+      for (let x = cx - 4; x <= cx + 3; x++) {
+        const dx = x - (cx - 0.5), dy = y - (s * 0.42);
+        if (dx * dx + dy * dy * 1.6 > 14 + t.rand() * 3) continue;
+        leaf(x, y, t.rand() > 0.55);
+      }
+    }
   }
 }
 

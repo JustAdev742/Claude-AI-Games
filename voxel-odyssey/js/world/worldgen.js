@@ -21,6 +21,7 @@ import { ID } from './blocks.js';
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ, WATER_LEVEL, BEACH_LEVEL } from './constants.js';
 import { RNG, hashCombine, clamp } from '../core/utils.js';
 import { Climate, selectBiome } from './climate.js';
+import { treeBlocks } from './trees.js';
 
 // ---- tuning constants ----------------------------------------------------
 
@@ -650,89 +651,19 @@ export class WorldGen {
   }
 
   // Build a tree of the given kind. `baseY` is the y of the trunk's bottom
-  // (i.e. the cell directly above the ground). Trunk/leaf blocks that would
-  // fall outside this chunk's [0,16) x/z columns are clamped/skipped so a
-  // chunk never tries to write a neighbour's voxels.
+  // (i.e. the cell directly above the ground). The shape itself comes from
+  // trees.js, which saplings share. Trunk/leaf blocks that would fall outside
+  // this chunk's [0,16) x/z columns are skipped so a chunk never tries to
+  // write a neighbour's voxels.
   _tree(chunk, lx, lz, baseY, kind, r) {
-    let logId, leafId, trunkH, radius, shape;
-    if (kind === 'birch') {
-      logId = ID.BIRCH_LOG; leafId = ID.BIRCH_LEAVES;
-      trunkH = 5 + Math.floor(r() * 2); radius = 2; shape = 'round';
-    } else if (kind === 'pine') {
-      logId = ID.PINE_LOG; leafId = ID.PINE_LEAVES;
-      trunkH = 6 + Math.floor(r() * 3); radius = 2; shape = 'cone';
-    } else { // oak
-      logId = ID.LOG; leafId = ID.LEAVES;
-      trunkH = 4 + Math.floor(r() * 2); radius = 2; shape = 'round';
-    }
-
-    const topY = baseY + trunkH - 1;
-    if (topY + radius > MAX_Y) {
-      // Not enough vertical room; abort rather than clip the canopy oddly.
-      trunkH = Math.max(3, MAX_Y - radius - baseY);
-      if (trunkH < 3) return;
-    }
-
-    // Trunk.
-    for (let i = 0; i < trunkH; i++) {
-      const y = baseY + i;
-      if (y > MAX_Y) break;
-      // Trunk is always inside this column, so no clamping needed here.
-      if (this._canOverwrite(chunk.getLocal(lx, y, lz))) {
-        chunk.setLocal(lx, y, lz, logId);
-      }
-    }
-
-    // Canopy.
-    if (shape === 'cone') {
-      this._pineCanopy(chunk, lx, lz, baseY, trunkH, leafId);
-    } else {
-      this._roundCanopy(chunk, lx, lz, baseY + trunkH - 1, leafId);
-    }
-  }
-
-  // Spherical-ish canopy centered near the trunk top for oak/birch.
-  _roundCanopy(chunk, lx, lz, topLogY, leafId) {
-    // Two main layers of radius 2, then a small cap.
-    const layers = [
-      { dy: -1, rad: 2 },
-      { dy: 0, rad: 2 },
-      { dy: 1, rad: 1 },
-      { dy: 2, rad: 1 },
-    ];
-    for (const layer of layers) {
-      const y = topLogY + layer.dy;
-      if (y < 0 || y > MAX_Y) continue;
-      const rad = layer.rad;
-      for (let dx = -rad; dx <= rad; dx++) {
-        for (let dz = -rad; dz <= rad; dz++) {
-          // Skip the trunk cell on the trunk layers (let log show through).
-          if (dx === 0 && dz === 0 && layer.dy <= 0) continue;
-          // Round off the corners of the widest layers.
-          if (rad === 2 && Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
-          this._placeLeaf(chunk, lx + dx, y, lz + dz, leafId);
-        }
-      }
-    }
-  }
-
-  // Conical layered canopy for pines: wide at the bottom, narrowing upward.
-  _pineCanopy(chunk, lx, lz, baseY, trunkH, leafId) {
-    const startY = baseY + 1;                    // leaves start a bit up the trunk
-    const top = baseY + trunkH - 1;
-    let rad = 2;
-    for (let y = startY; y <= top + 1; y++) {
-      if (y < 0 || y > MAX_Y) continue;
-      // Shrink radius as we climb; alternate full/narrow rings for a layered look.
-      const ring = top + 1 - y;
-      rad = ring >= 4 ? 2 : ring >= 2 ? 1 : 0;
-      if (rad === 0) { this._placeLeaf(chunk, lx, y, lz, leafId); continue; }
-      for (let dx = -rad; dx <= rad; dx++) {
-        for (let dz = -rad; dz <= rad; dz++) {
-          if (Math.abs(dx) === rad && Math.abs(dz) === rad) continue; // chamfer
-          if (dx === 0 && dz === 0 && y <= top) continue;             // keep trunk
-          this._placeLeaf(chunk, lx + dx, y, lz + dz, leafId);
-        }
+    const tree = treeBlocks(kind, r, MAX_Y - baseY);
+    for (const b of tree.blocks) {
+      const y = baseY + b.dy;
+      if (b.leaf) {
+        this._placeLeaf(chunk, lx + b.dx, y, lz + b.dz, b.id);
+      } else if (y <= MAX_Y && this._canOverwrite(chunk.getLocal(lx, y, lz))) {
+        // The trunk is always inside this column, so no clamping is needed.
+        chunk.setLocal(lx, y, lz, b.id);
       }
     }
   }

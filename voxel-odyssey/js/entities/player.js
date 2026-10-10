@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import Blocks, { ID } from '../world/blocks.js';
 import { buildBlockGeometry, buildSpriteGeometry, buildBoxGeometry, setBlockGeometryLight } from '../render/blockModel.js';
 import Items from '../items/items.js';
+import { kindOfSapling } from '../world/trees.js';
 import { clamp, lerp, damp, DEG2RAD } from '../core/utils.js';
 
 /* ---- tuning constants ---------------------------------------------------- */
@@ -859,7 +860,7 @@ export class Player {
     // false). Soft blocks like flowers cost nothing.
     if (drop && (Blocks.get(blockId) || {}).hardness > 0) this._wearHeldTool(1);
 
-    if (drop) {
+    if (drop && Math.random() < Items.dropChance(blockId)) {
       const dropKey = Items.dropFor(blockId);
       if (dropKey && this.game.entities && typeof this.game.entities.dropItem === 'function') {
         try { this.game.entities.dropItem(x + 0.5, y + 0.5, z + 0.5, dropKey, 1); } catch (_) {}
@@ -970,6 +971,15 @@ export class Player {
     const replaceable = targetId === ID.AIR ||
       (targetDef && (targetDef.render === 'cross' || targetDef.liquid));
     if (!replaceable) return;
+
+    // Saplings only take root in soil.
+    if (kindOfSapling(blockId)) {
+      const under = world.getBlock(px, py - 1, pz);
+      if (under !== ID.GRASS && under !== ID.DIRT) {
+        this.game.toast('Saplings need grass or dirt', 'warn');
+        return;
+      }
+    }
 
     // Must not intersect the player's body (unless placing a non-solid).
     if (Blocks.isSolid(blockId) && this._aabbOverlapsCell(px, py, pz)) return;

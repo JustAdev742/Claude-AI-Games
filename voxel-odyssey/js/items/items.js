@@ -77,9 +77,9 @@ add('bone', { name: 'Bone', desc: 'Rattles when shaken.', icon: { kind: 'shape',
 add('leather', { name: 'Leather', desc: 'Tough animal hide.', icon: { kind: 'shape', shape: 'lump', color: rgb(150, 100, 60) } });
 add('feather', { name: 'Feather', desc: 'Light as air.', icon: { kind: 'shape', shape: 'stick', color: rgb(240, 240, 245) } });
 add('gunpowder', { name: 'Gunpowder', desc: 'Goes boom.', icon: { kind: 'shape', shape: 'dust', color: rgb(90, 90, 96) } });
-add('sapling_oak', { name: 'Oak Sapling', category: 'material', desc: 'A tiny tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(72, 140, 60) } });
-add('sapling_birch', { name: 'Birch Sapling', category: 'material', desc: 'A tiny tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(120, 160, 90) } });
-add('sapling_pine', { name: 'Pine Sapling', category: 'material', desc: 'A tiny tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(48, 100, 70) } });
+add('sapling_oak', { name: 'Oak Sapling', category: 'material', blockId: ID.SAPLING_OAK, desc: 'Plant on grass or dirt; it grows into a tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(72, 140, 60) } });
+add('sapling_birch', { name: 'Birch Sapling', category: 'material', blockId: ID.SAPLING_BIRCH, desc: 'Plant on grass or dirt; it grows into a tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(120, 160, 90) } });
+add('sapling_pine', { name: 'Pine Sapling', category: 'material', blockId: ID.SAPLING_PINE, desc: 'Plant on grass or dirt; it grows into a tree.', icon: { kind: 'shape', shape: 'sapling', color: rgb(48, 100, 70) } });
 
 // ---- food ----------------------------------------------------------------
 add('apple', { name: 'Apple', category: 'food', food: 4, desc: 'Restores 4 HP.', icon: { kind: 'shape', shape: 'apple', color: rgb(210, 50, 50) } });
@@ -150,6 +150,11 @@ export const Items = {
   dropFor(blockId) {
     const b = Blocks.get(blockId);
     return b.drop || null;
+  },
+  // Chance (0..1) that breaking the block actually yields its drop.
+  dropChance(blockId) {
+    const b = Blocks.get(blockId);
+    return typeof b.dropChance === 'number' ? b.dropChance : 1;
   },
 
   drawIcon,

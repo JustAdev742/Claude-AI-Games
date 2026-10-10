@@ -123,6 +123,9 @@ export const ID = {
   LANTERN: 40,
   LAVA: 41,
   FURNACE_LIT: 42,   // the furnace while it is burning (placed/removed by the furnace system)
+  SAPLING_OAK: 43,
+  SAPLING_BIRCH: 44,
+  SAPLING_PINE: 45,
 };
 Object.freeze(ID);
 
@@ -187,7 +190,7 @@ register(ID.LOG, 'log', {
 });
 register(ID.LEAVES, 'leaves', {
   name: 'Oak Leaves', color: rgb(84, 152, 52), transparent: true, opacity: 2,
-  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_oak', walkSound: 'grass',
+  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_oak', dropChance: 0.12, walkSound: 'grass',
 });
 register(ID.PLANKS, 'planks', {
   name: 'Oak Planks', color: rgb(176, 140, 86), hardness: 1.2, tool: 'axe',
@@ -267,7 +270,7 @@ register(ID.BIRCH_LOG, 'birch_log', {
 });
 register(ID.BIRCH_LEAVES, 'birch_leaves', {
   name: 'Birch Leaves', color: rgb(132, 178, 88), transparent: true, opacity: 2,
-  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_birch', walkSound: 'grass',
+  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_birch', dropChance: 0.12, walkSound: 'grass',
 });
 register(ID.PINE_LOG, 'pine_log', {
   name: 'Pine Log', color: rgb(82, 60, 40), top: rgb(120, 96, 64), bottom: rgb(120, 96, 64),
@@ -275,7 +278,20 @@ register(ID.PINE_LOG, 'pine_log', {
 });
 register(ID.PINE_LEAVES, 'pine_leaves', {
   name: 'Pine Needles', color: rgb(54, 116, 76), transparent: true, opacity: 2,
-  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_pine', walkSound: 'grass',
+  hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_pine', dropChance: 0.12, walkSound: 'grass',
+});
+// Saplings: planted on grass or dirt, they grow into a tree (see world/growth.js).
+register(ID.SAPLING_OAK, 'sapling_oak', {
+  name: 'Oak Sapling', solid: false, transparent: true, opacity: 0, render: 'cross',
+  color: rgb(72, 140, 60), hardness: 0, tool: 'any', walkSound: 'grass',
+});
+register(ID.SAPLING_BIRCH, 'sapling_birch', {
+  name: 'Birch Sapling', solid: false, transparent: true, opacity: 0, render: 'cross',
+  color: rgb(120, 160, 90), hardness: 0, tool: 'any', walkSound: 'grass',
+});
+register(ID.SAPLING_PINE, 'sapling_pine', {
+  name: 'Pine Sapling', solid: false, transparent: true, opacity: 0, render: 'cross',
+  color: rgb(48, 100, 70), hardness: 0, tool: 'any', walkSound: 'grass',
 });
 register(ID.FLOWER_RED, 'flower_red', {
   name: 'Poppy', solid: false, transparent: true, opacity: 0, render: 'cross',

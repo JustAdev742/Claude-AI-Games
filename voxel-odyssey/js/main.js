@@ -32,6 +32,7 @@ import { EntityManager } from './entities/entityManager.js';
 import { Inventory } from './items/inventory.js';
 import { Crafting } from './items/crafting.js';
 import { Furnaces } from './items/furnace.js';
+import { Growth } from './world/growth.js';
 import { Particles } from './fx/particles.js';
 import { AudioSystem } from './fx/audio.js';
 import { Resources } from './render/resources.js';
@@ -49,6 +50,7 @@ const LOADING_TIPS = [
   'Tip: Build a Crafting Table for the 3×3 grid.',
   'Tip: Smelt ore in a Furnace — right-click it, add fuel and ore.',
   'Tip: Tools wear out; the bar under the icon shows what is left.',
+  'Tip: Break leaves to find saplings, then plant them on grass to grow a tree.',
   'Tip: Torches keep the monsters away at night.',
   'Tip: Press F to toggle creative flight.',
   'Tip: Diamonds hide deep underground.',
@@ -91,7 +93,7 @@ async function boot() {
     items: Items,
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
-    inventory: null, crafting: null, furnaces: null, particles: null, audio: null,
+    inventory: null, crafting: null, furnaces: null, growth: null, particles: null, audio: null,
     sky: null, weather: null, hud: null, menus: null, touch: null, resources: null,
     net: null, remotePlayers: null,
     // runtime
@@ -106,6 +108,7 @@ async function boot() {
   game.inventory = new Inventory(game);
   game.crafting = new Crafting(game);
   game.furnaces = new Furnaces(game);
+  game.growth = new Growth(game);
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
   game.sky = new Sky(game);
@@ -125,7 +128,7 @@ async function boot() {
   // `resources` comes after `world` because building the atlas hands it
   // straight to World.setAtlas, which needs World's materials to exist.
   const initOrder = [
-    'worldgen', 'world', 'resources', 'inventory', 'crafting', 'furnaces', 'particles',
+    'worldgen', 'world', 'resources', 'inventory', 'crafting', 'furnaces', 'growth', 'particles',
     'audio', 'sky', 'weather', 'entities', 'player', 'hud', 'menus', 'touch',
   ];
   for (const name of initOrder) {
@@ -258,6 +261,7 @@ async function boot() {
     game.worldgen.setSeed ? game.worldgen.setSeed(game.seed) : (game.worldgen.seed = game.seed);
     game.world.reset(game.seed);
     game.furnaces.reset();
+    game.growth.reset();
     game.entities.removeAll();
     game.particles.reset && game.particles.reset();
 
@@ -265,6 +269,7 @@ async function boot() {
     if (save) {
       game.world.applyEdits(save.edits || []);
       game.furnaces.load(save.furnaces);
+      game.growth.scanEdits();
       game.inventory.load(save.inventory);
       game.player.load(save.player);
       game.sky.load(save.sky);
@@ -390,6 +395,7 @@ async function boot() {
           // Smelting carries on while the inventory screen is open and while
           // the player is away from the furnace.
           game.furnaces.update(dt);
+          game.growth.update(dt);
         }
         game.world.update(dt, anchor);
         game.particles.update(dt);
