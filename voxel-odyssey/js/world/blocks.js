@@ -126,6 +126,7 @@ export const ID = {
   SAPLING_OAK: 43,
   SAPLING_BIRCH: 44,
   SAPLING_PINE: 45,
+  CHEST: 46,
 };
 Object.freeze(ID);
 
@@ -279,6 +280,10 @@ register(ID.PINE_LOG, 'pine_log', {
 register(ID.PINE_LEAVES, 'pine_leaves', {
   name: 'Pine Needles', color: rgb(54, 116, 76), transparent: true, opacity: 2,
   hardness: 0.3, tool: 'any', flammable: true, drop: 'sapling_pine', dropChance: 0.12, walkSound: 'grass',
+});
+register(ID.CHEST, 'chest', {
+  name: 'Chest', color: rgb(150, 104, 54), top: rgb(138, 96, 50),
+  hardness: 1.4, tool: 'axe', flammable: true, walkSound: 'wood',
 });
 // Saplings: planted on grass or dirt, they grow into a tree (see world/growth.js).
 register(ID.SAPLING_OAK, 'sapling_oak', {

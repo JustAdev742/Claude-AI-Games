@@ -406,6 +406,33 @@ const RECIPES = {
     for (let x = 4; x < s - 4; x++) t.set(x, s - 3, 196, 108, 40);
   },
 
+  // Chest: planks with a darker frame; the side adds the lid seam and a latch.
+  chest_top: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * 0.8, p[1] * 0.76, p[2] * 0.72);
+    }
+    t.outline([66, 46, 26]);
+  },
+  chest_side: (t) => {
+    RECIPES.planks(t);
+    const s = t.size;
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const p = t.get(x, y);
+      t.set(x, y, p[0] * 0.86, p[1] * 0.82, p[2] * 0.78);
+    }
+    t.outline([66, 46, 26]);
+    // Lid seam across the upper third.
+    const seam = (s * 0.34) | 0;
+    for (let x = 1; x < s - 1; x++) { t.set(x, seam, 58, 40, 22); t.set(x, seam + 1, 112, 80, 46); }
+    // Iron latch straddling the seam.
+    const cx = (s / 2) | 0;
+    for (let y = seam - 1; y <= seam + 3; y++) for (let x = cx - 1; x <= cx; x++) t.set(x, y, 168, 168, 176);
+    t.set(cx - 1, seam + 2, 70, 70, 78); t.set(cx, seam + 2, 70, 70, 78);
+  },
+
   // The burning furnace: same body, but the opening is full of fire.
   furnace_lit_side: (t) => {
     t.mottle(baseColor('cobblestone'), 0.09);

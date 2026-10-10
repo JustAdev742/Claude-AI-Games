@@ -31,6 +31,7 @@
 
 import Items from '../items/items.js';
 import { cloneStack } from '../items/inventory.js';
+import { CHEST_SLOTS, moveInto } from '../items/chest.js';
 import { smeltRecipe, fuelTime } from '../items/furnace.js';
 import { ID } from '../world/blocks.js';
 import { DEFAULT_SETTINGS } from '../core/state.js';
@@ -63,6 +64,7 @@ export class Menus {
     this.craftGrid = new Array(9).fill(null);   // item keys | null (row-major)
     this.cursor = null;                  // stack held "on the cursor": {id,count}|null
     this.furnacePos = null;              // {x,y,z} while the smelting screen is open
+    this.chestPos = null;                // {x,y,z} while a chest is open
     this._furnaceSig = '';               // cheap change detector for the live furnace panel
 
     // Cached references to live DOM we refresh frequently (inventory only).
@@ -118,6 +120,7 @@ export class Menus {
     // Everything is event-driven except the furnace screen, whose flame and
     // progress arrow tick every frame while it is open.
     if (this.invOpen && this.furnacePos) this._updateFurnacePanel();
+    if (this.invOpen && this.chestPos) this._checkChestStillThere();
   }
 
   /* =====================================================================
@@ -818,7 +821,14 @@ export class Menus {
     this._openInventory(false, { x, y, z });
   }
 
-  _openInventory(forceCraftingTable, furnace) {
+  // Open the storage screen for the chest at (x, y, z).
+  openChest(x, y, z) {
+    if (this.invOpen) return;
+    if (this.game && this.game.chests) this.game.chests.ensure(x, y, z);
+    this._openInventory(false, null, { x, y, z });
+  }
+
+  _openInventory(forceCraftingTable, furnace, chest) {
     if (!this.layer) return;
 
     // Opening the inventory counts as opening a menu: release the mouse.
@@ -832,6 +842,7 @@ export class Menus {
     this.current = 'inventory';
     this.craftingTable = !!forceCraftingTable;
     this.furnacePos = furnace || null;
+    this.chestPos = chest || null;
     this._furnaceSig = '';
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
@@ -857,6 +868,7 @@ export class Menus {
     this.invOpen = false;
     this.current = null;
     this.furnacePos = null;
+    this.chestPos = null;
     this._hideTooltip();
     this._hideGhost();
 
@@ -901,7 +913,7 @@ export class Menus {
     // Title + close button row.
     const titleRow = this._make('div', { class: 'row between' });
     titleRow.appendChild(this._make('h1', {
-      text: this.furnacePos ? 'Furnace' : this.craftingTable ? 'Crafting Table' : 'Inventory',
+      text: this.furnacePos ? 'Furnace' : this.chestPos ? 'Chest' : this.craftingTable ? 'Crafting Table' : 'Inventory',
       style: 'font-size:24px;',
     }));
     titleRow.appendChild(this._button('Close', {
@@ -910,8 +922,11 @@ export class Menus {
     panel.appendChild(titleRow);
 
     let craftSlots = [], outSlot = null, recipeSlots = [], furnaceEls = null;
+    let chestSlots = [];
     if (this.furnacePos) {
       furnaceEls = this._buildFurnaceArea(panel);
+    } else if (this.chestPos) {
+      chestSlots = this._buildChestArea(panel);
     } else {
       // ---- Crafting area: grid + arrow + output, beside the recipe book ----
       panel.appendChild(this._make('div', { class: 'section-title', text: 'CRAFTING' }));
@@ -1009,7 +1024,7 @@ export class Menus {
 
     this._invEls = {
       overlay, panel,
-      craftSlots, outSlot, mainSlots, hotSlots, recipeSlots, furnaceEls,
+      craftSlots, outSlot, mainSlots, hotSlots, recipeSlots, furnaceEls, chestSlots,
     };
   }
 
@@ -1087,6 +1102,10 @@ export class Menus {
       this._drawStack(el, key ? { id: key, count: 1 } : null);
     }
 
+    if (this._invEls.chestSlots && this._invEls.chestSlots.length) {
+      const st = this._chestState();
+      for (const { slot, el } of this._invEls.chestSlots) this._drawStack(el, st ? st.slots[slot] : null);
+    }
     if (this._invEls.furnaceEls) this._furnaceSig = '';   // force the panel to redraw
     if (this._invEls.furnaceEls) this._updateFurnacePanel();
 
@@ -1113,6 +1132,68 @@ export class Menus {
     if (!crafting || typeof crafting.match !== 'function') return null;
     // Pass a length-9 grid; crafting handles the 2×2 subset transparently.
     return crafting.match(this.craftGrid.slice());
+  }
+
+  /* ---- the chest screen ------------------------------------------------- */
+
+  _chestState() {
+    const c = this.game && this.game.chests, p = this.chestPos;
+    return c && p ? c.ensure(p.x, p.y, p.z) : null;
+  }
+
+  // Three rows of nine slots above the inventory. Returns [{slot, el}].
+  _buildChestArea(panel) {
+    panel.appendChild(this._make('div', { class: 'section-title', text: 'CHEST' }));
+    const grid = this._make('div', { class: 'inv-grid main' });
+    const out = [];
+    for (let i = 0; i < CHEST_SLOTS; i++) {
+      const slot = this._makeSlot();
+      slot.dataset.kind = 'chest';
+      slot.dataset.slot = String(i);
+      slot.addEventListener('click', (e) => this._onChestSlotClick(i, e));
+      slot.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onChestSlotClick(i, e); });
+      slot.addEventListener('mouseenter', () => {
+        const st = this._chestState();
+        const s = st ? st.slots[i] : null;
+        this._showTooltipFor(s ? s.id : null);
+      });
+      slot.addEventListener('mouseleave', () => this._hideTooltip());
+      out.push({ slot: i, el: slot });
+      grid.appendChild(slot);
+    }
+    panel.appendChild(grid);
+    return out;
+  }
+
+  _onChestSlotClick(i, e) {
+    const st = this._chestState();
+    if (!st) return;
+    // Shift-click sends the stack to the inventory.
+    if (e && e.shiftKey && st.slots[i]) {
+      const inv = this.game && this.game.inventory;
+      if (inv) {
+        const left = inv.addStack(st.slots[i]);
+        st.slots[i] = left > 0 ? cloneStack(st.slots[i], left) : null;
+        this._afterSlotMutation();
+        return;
+      }
+    }
+    this._clickStackSlot(st.slots, i, e);
+  }
+
+  _quickMoveToChest(slotIndex) {
+    const inv = this.game && this.game.inventory, st = this._chestState();
+    const here = inv && inv.slots[slotIndex];
+    if (!st || !here) return;
+    const left = moveInto(st.slots, here);
+    inv.slots[slotIndex] = left > 0 ? cloneStack(here, left) : null;
+    this._afterSlotMutation();
+  }
+
+  // The block can vanish under an open screen (broken by someone else).
+  _checkChestStillThere() {
+    const g = this.game, p = this.chestPos;
+    if (g && g.world && p && g.world.getBlock(p.x, p.y, p.z) !== ID.CHEST) this._closeInventory();
   }
 
   /* ---- the furnace screen ---------------------------------------------- */
@@ -1262,7 +1343,13 @@ export class Menus {
   _onInvSlotClick(slotIndex, e) {
     const inv = this.game && this.game.inventory;
     if (!inv || !inv.slots) return;
-    const slots = inv.slots;
+    // Shift-click with a chest open sends the stack straight across.
+    if (e && e.shiftKey && this.chestPos) { this._quickMoveToChest(slotIndex); return; }
+    this._clickStackSlot(inv.slots, slotIndex, e);
+  }
+
+  // The cursor-stack interaction for any array of slots (inventory or chest).
+  _clickStackSlot(slots, slotIndex, e) {
     const cur = this.cursor;
     const here = slots[slotIndex] || null;
 

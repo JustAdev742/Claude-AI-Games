@@ -531,3 +531,12 @@ conventions (`new System(game)`, optional `init()`, everything read off `game`).
   `{moveX, moveY, lookDX, lookDY, active, held}`.
 - **`WorldGen.findSpawnSpot(x,z)` / `spawnScore(x,z)`**: nearest broad, gentle
   stretch of land (used by `World.getGroundSpawn`).
+- **`js/items/chest.js` → `Chests`** (`game.chests`): 27-slot storage per chest
+  position; same persistence/spill pattern as furnaces; `moveInto(slots, stack)`
+  stacks into any slot array (used by shift-click). Opened with
+  `menus.openChest(x,y,z)`; the cursor-stack click logic is the shared
+  `Menus._clickStackSlot(slots, i, e)`.
+- **`js/world/trees.js` / `growth.js`**: `treeBlocks(kind, rng, headroom)` is the
+  single definition of a tree, used by `WorldGen._tree` and by `Growth`
+  (`game.growth`), which tracks sapling blocks (via `block:update`) and grows
+  them with `cause:'network'` writes. Skipped while connected to a server.

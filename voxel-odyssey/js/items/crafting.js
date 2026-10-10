@@ -475,6 +475,12 @@ function buildRecipes() {
      ['cobblestone', null, 'cobblestone'],
      ['cobblestone', 'cobblestone', 'cobblestone']], 'furnace', 1));
 
+  // 8 planks ring (hollow center) → chest.
+  out.push(shaped('chest', 'Chest',
+    [['planks', 'planks', 'planks'],
+     ['planks', null, 'planks'],
+     ['planks', 'planks', 'planks']], 'chest', 1));
+
   // Torch: coal over a stick → 4 torches.
   out.push(shaped('torch', 'Torch', [['coal'], ['stick']], 'torch', 4));
   // Charcoal works too.

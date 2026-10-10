@@ -125,7 +125,8 @@ and play with privately, not something this repository should redistribute.
 | Debug overlay | `F3` |
 | Pause / menu | `Esc` |
 | Free the mouse without pausing | `U` (click the game to capture it again) |
-| Open a furnace / crafting table | **Right Mouse** on it |
+| Open a furnace / chest / crafting table | **Right Mouse** on it |
+| Move a stack between chest and inventory | `Shift` + click |
 
 Every binding is remappable in **Settings → Customise Controls**. Gamepads are
 supported (left stick moves, right stick looks) with an adjustable deadzone
@@ -155,6 +156,11 @@ to look, and tap the hotbar to choose an item. They hide behind menus. Add
   in the top slot and coal, charcoal, logs or planks in the fuel slot. Iron and
   gold ingots, glass, stone, bricks, charcoal and cooked meat all come from
   here, and the furnace glows while it burns. Contents are saved with the world.
+- **Chests** — craft one from eight planks, right-click it to open 27 slots of
+  storage; shift-click moves stacks between chest and inventory, and worn tools
+  keep their wear. Contents are saved with the world and spill when it breaks.
+- **Saplings** — leaves occasionally drop saplings; plant one on grass or dirt
+  and it grows into an oak, birch or pine given light and room (single-player).
 - **Tool wear** — tools lose durability as you mine and fight, show a bar under
   their icon, and break when used up. Wear survives moving, saving and loading.
 - **Survival** — health, fall damage, drowning, hunger for food, and a
@@ -184,19 +190,20 @@ vendor/three.module.js  Three.js r160 (vendored, MIT)
 js/
   main.js             bootstrap, game-flow state machine, the loop
   core/   utils, events (bus), state (settings/save), input, engine
-  world/  constants, blocks, noise, climate, worldgen, biomeColor, chunk (mesher),
-          world, lighting (flood fill), meshPool + mesher.worker (off-thread meshing)
+  world/  constants, blocks, noise, climate, worldgen, trees, growth, biomeColor,
+          chunk (mesher), world, lighting (flood fill), meshPool + mesher.worker
   render/ material (voxel shader), atlas (texture array), textures
           (procedural set), resourcepack (.zip reader), resources
   net/    client (prediction + interpolation), remotePlayers (rigs)
   entities/  player, mob, entityManager
-  items/  items (registry + icons), inventory, crafting, furnace (smelting)
+  items/  items (registry + icons), inventory, crafting, furnace (smelting), chest
   fx/     particles, audio, sky, weather
   ui/     hud, menus, touch (on-screen controls)
 shared/ protocol.js  — wire format, imported by both client and server
 server/ index.js (game server + static host), websocket.js (RFC 6455)
 tests/  node: run, lighting, resourcepack, pathfinder, worldgen, furnace, biomecolor,
-        multiplayer · browser: smoke, interact, e2e-controls, e2e-furnace, e2e-touch
+        growth, chest, multiplayer · browser: smoke, interact, e2e-controls,
+        e2e-furnace, e2e-sapling, e2e-chest, e2e-touch
 tools/  build-single-file.mjs (inlines everything into dist/voxel-odyssey.html)
 ```
 
@@ -226,17 +233,19 @@ colours — compounds the darkening and renders mid-green leaves near black.
 ## 🧪 Tests
 
 ```bash
-npm test                     # all Node suites (~300 assertions)
+npm test                     # all Node suites (~360 assertions)
 node tests/run.js            # pure logic: noise, worldgen, meshing, inventory, crafting
 node tests/lighting.test.mjs # light propagation: falloff, shadows, relighting, cross-chunk
 node tests/resourcepack.test.mjs  # the ZIP reader, against archives built byte-by-byte
 node tests/worldgen.test.mjs      # determinism, seams, surface mix, landmass size, spawn quality
 node tests/furnace.test.mjs       # smelting rules, fuel, persistence, tool wear
 node tests/biomecolor.test.mjs    # tint model, mesher integration, climate recording
+node tests/growth.test.mjs        # tree shapes + sapling growth against a mock world
+node tests/chest.test.mjs         # storage rules, stack moving, persistence
 node tests/multiplayer.test.mjs   # protocol round-trips + a live server driven by real sockets
 
 npm run test:browser         # headless Chromium: rendering + real gameplay
-                             # (e2e-controls: real mouse; e2e-furnace: real DOM clicks;
+                             # (e2e-controls: real mouse; e2e-furnace / e2e-chest / e2e-sapling: real clicks;
                              #  e2e-touch: emulated phone with touch events)
 ```
 

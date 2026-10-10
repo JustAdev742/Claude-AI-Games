@@ -1,7 +1,7 @@
 /* Grab a gameplay screenshot for eyeballing visual changes.
    Usage: node tests/shot.mjs [outfile] [timeOfDay] [spec-json]
    spec: { biome: 'desert'|'jungle'|..., seed, view: 'vista'|'ground'|'tree'|'water'|'underwater', yaw, pitch, dist, log: 'pine'|'birch',
-           give: [item ids], hold: hotbar index, mobs: ['pig', ...], torches: [[right,forward],...], weather: 'rain' }
+           give: [item ids], hold: hotbar index, mobs: ['pig', ...], torches: [[right,forward],...], blocks: [[right,forward,'chest'],...], weather: 'rain' }
    'vista'  hover above the spawn and look down over the terrain (default)
    'ground' stand on the surface at spawn, looking at the horizon
    'tree'   stand a few blocks from the nearest log, looking at its crown
@@ -138,6 +138,11 @@ try {
     (spec.torches || []).forEach(([right, fwd]) => {
       const tx = Math.floor(x - Math.sin(yaw) * fwd + Math.cos(yaw) * right), tz = Math.floor(z - Math.cos(yaw) * fwd - Math.sin(yaw) * right);
       g.world.setBlock(tx, w.heightAt(tx, tz) + 1, tz, B.TORCH, { cause: 'place', by: 'test' });
+    });
+    // spec.blocks = [[right, forward, 'chest'], ...]: place named blocks on the ground ahead.
+    (spec.blocks || []).forEach(([right, fwd, key]) => {
+      const bx = Math.floor(x - Math.sin(yaw) * fwd + Math.cos(yaw) * right), bz = Math.floor(z - Math.cos(yaw) * fwd - Math.sin(yaw) * right);
+      g.world.setBlock(bx, w.heightAt(bx, bz) + 1, bz, g.blocks.byKey(key).id, { cause: 'place', by: 'test' });
     });
     if (spec.weather) g.weather.setWeather(spec.weather, 1);
     g.player.flying = flying;

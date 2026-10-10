@@ -921,6 +921,12 @@ export class Player {
           return;
         }
       }
+      if (hit.blockId === ID.CHEST) {
+        if (this.game.menus && typeof this.game.menus.openChest === 'function') {
+          this.game.menus.openChest(hit.block.x, hit.block.y, hit.block.z);
+          return;
+        }
+      }
       if (hit.blockId === ID.FURNACE || hit.blockId === ID.FURNACE_LIT) {
         if (this.game.menus && typeof this.game.menus.openFurnace === 'function') {
           this.game.menus.openFurnace(hit.block.x, hit.block.y, hit.block.z);

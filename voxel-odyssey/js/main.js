@@ -32,6 +32,7 @@ import { EntityManager } from './entities/entityManager.js';
 import { Inventory } from './items/inventory.js';
 import { Crafting } from './items/crafting.js';
 import { Furnaces } from './items/furnace.js';
+import { Chests } from './items/chest.js';
 import { Growth } from './world/growth.js';
 import { Particles } from './fx/particles.js';
 import { AudioSystem } from './fx/audio.js';
@@ -49,6 +50,7 @@ const LOADING_TIPS = [
   'Tip: Press E to open your inventory and craft.',
   'Tip: Build a Crafting Table for the 3×3 grid.',
   'Tip: Smelt ore in a Furnace — right-click it, add fuel and ore.',
+  'Tip: Craft a Chest from eight planks to store your things.',
   'Tip: Tools wear out; the bar under the icon shows what is left.',
   'Tip: Break leaves to find saplings, then plant them on grass to grow a tree.',
   'Tip: Torches keep the monsters away at night.',
@@ -93,7 +95,7 @@ async function boot() {
     items: Items,
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
-    inventory: null, crafting: null, furnaces: null, growth: null, particles: null, audio: null,
+    inventory: null, crafting: null, furnaces: null, chests: null, growth: null, particles: null, audio: null,
     sky: null, weather: null, hud: null, menus: null, touch: null, resources: null,
     net: null, remotePlayers: null,
     // runtime
@@ -108,6 +110,7 @@ async function boot() {
   game.inventory = new Inventory(game);
   game.crafting = new Crafting(game);
   game.furnaces = new Furnaces(game);
+  game.chests = new Chests(game);
   game.growth = new Growth(game);
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
@@ -128,7 +131,7 @@ async function boot() {
   // `resources` comes after `world` because building the atlas hands it
   // straight to World.setAtlas, which needs World's materials to exist.
   const initOrder = [
-    'worldgen', 'world', 'resources', 'inventory', 'crafting', 'furnaces', 'growth', 'particles',
+    'worldgen', 'world', 'resources', 'inventory', 'crafting', 'furnaces', 'chests', 'growth', 'particles',
     'audio', 'sky', 'weather', 'entities', 'player', 'hud', 'menus', 'touch',
   ];
   for (const name of initOrder) {
@@ -261,6 +264,7 @@ async function boot() {
     game.worldgen.setSeed ? game.worldgen.setSeed(game.seed) : (game.worldgen.seed = game.seed);
     game.world.reset(game.seed);
     game.furnaces.reset();
+    game.chests.reset();
     game.growth.reset();
     game.entities.removeAll();
     game.particles.reset && game.particles.reset();
@@ -269,6 +273,7 @@ async function boot() {
     if (save) {
       game.world.applyEdits(save.edits || []);
       game.furnaces.load(save.furnaces);
+      game.chests.load(save.chests);
       game.growth.scanEdits();
       game.inventory.load(save.inventory);
       game.player.load(save.player);
@@ -356,6 +361,7 @@ async function boot() {
       seed: game.seed,
       edits: game.world.serialize().edits,
       furnaces: game.furnaces.serialize(),
+      chests: game.chests.serialize(),
       inventory: game.inventory.serialize(),
       player: game.player.serialize(),
       sky: game.sky.serialize(),
