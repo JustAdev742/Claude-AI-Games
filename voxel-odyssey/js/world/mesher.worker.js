@@ -24,6 +24,7 @@
    ========================================================================= */
 
 import { meshChunk } from './chunk.js';
+import { packBucket, packedBuffers } from './vertexPack.js';
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ } from './constants.js';
 
 const PAD = 1;
@@ -119,29 +120,12 @@ self.onmessage = (e) => {
     return;
   }
 
-  // Convert the plain arrays the mesher builds into typed arrays and hand
-  // ownership to the main thread, so the geometry upload is a zero-copy move.
-  const transfers = [];
-  const pack = (bucket) => {
-    const out = {
-      positions: new Float32Array(bucket.positions),
-      normals: new Float32Array(bucket.normals),
-      colors: new Float32Array(bucket.colors),
-      light: new Float32Array(bucket.light),
-      ao: new Float32Array(bucket.ao),
-      uv: new Float32Array(bucket.uv),
-      texIdx: new Float32Array(bucket.texIdx),
-      indices: new Uint32Array(bucket.indices),
-    };
-    for (const key of Object.keys(out)) transfers.push(out[key].buffer);
-    return out;
-  };
+  // Pack the mesher's plain arrays into the compact 16-byte vertex format and
+  // hand the buffers over to the main thread without copying them.
+  const opaque = packBucket(data.opaque);
+  const water = packBucket(data.water);
+  const cross = packBucket(data.cross);
+  const transfers = [...packedBuffers(opaque), ...packedBuffers(water), ...packedBuffers(cross)];
 
-  self.postMessage({
-    type: 'meshed',
-    jobId, cx, cz,
-    opaque: pack(data.opaque),
-    water: pack(data.water),
-    cross: pack(data.cross),
-  }, transfers);
+  self.postMessage({ type: 'meshed', jobId, cx, cz, opaque, water, cross }, transfers);
 };

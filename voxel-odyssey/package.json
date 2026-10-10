@@ -7,8 +7,8 @@
   "scripts": {
     "start": "python3 -m http.server 8080",
     "serve": "npx --yes serve -l 8080 .",
-    "test": "node tests/run.js && node tests/lighting.test.mjs && node tests/resourcepack.test.mjs && node tests/pathfinder.test.mjs && node tests/worldgen.test.mjs && node tests/furnace.test.mjs && node tests/biomecolor.test.mjs && node tests/growth.test.mjs && node tests/chest.test.mjs && node tests/quality.test.mjs && node tests/multiplayer.test.mjs && node --import ./tests/three-resolve.mjs tests/streaming.test.mjs",
-    "test:browser": "node tests/smoke.mjs && node tests/interact.mjs && node tests/e2e-controls.mjs && node tests/e2e-furnace.mjs && node tests/e2e-sapling.mjs && node tests/e2e-chest.mjs && node tests/e2e-touch.mjs",
+    "test": "node tests/run.js && node tests/lighting.test.mjs && node tests/resourcepack.test.mjs && node tests/pathfinder.test.mjs && node tests/worldgen.test.mjs && node tests/furnace.test.mjs && node tests/biomecolor.test.mjs && node tests/growth.test.mjs && node tests/chest.test.mjs && node tests/quality.test.mjs && node tests/vertexpack.test.mjs && node tests/multiplayer.test.mjs && node --import ./tests/three-resolve.mjs tests/streaming.test.mjs",
+    "test:browser": "node tests/smoke.mjs && node tests/interact.mjs && node tests/e2e-controls.mjs && node tests/e2e-furnace.mjs && node tests/e2e-sapling.mjs && node tests/e2e-chest.mjs && node tests/e2e-touch.mjs && node tests/e2e-quality.mjs",
     "build": "node tools/build-single-file.mjs",
     "build:fragment": "node tools/build-single-file.mjs --fragment",
     "server": "node server/index.js"

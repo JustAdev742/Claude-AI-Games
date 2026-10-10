@@ -25,6 +25,7 @@ export class Perf {
     this.frames = 0;
     this._window = 0;
     this._samples = [];                 // recent frame times for percentiles (bounded)
+    this.draw = { calls: 0, triangles: 0, geometries: 0 };   // last frame's renderer statistics
   }
 
   now() { return performance.now(); }

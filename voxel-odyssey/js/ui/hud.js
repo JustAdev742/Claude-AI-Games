@@ -654,9 +654,11 @@ export class HUD {
     const perf = this.game && this.game.perf;
     let prof = '';
     if (perf) {
-      const info = engine && engine.renderer ? engine.renderer.info : null;
+      const d = perf.draw;
+      const q = this.game.quality;
       prof = `frame: ${perf.frameMs.toFixed(1)} ms cpu · worst ${perf.frameWorst.toFixed(0)} · ${perf.hitches} hitches\n` +
-        (info ? `draw: ${info.render.calls} calls · ${(info.render.triangles / 1000).toFixed(0)}k tris · ${info.memory.geometries} geo\n` : '') +
+        `draw: ${d.calls} calls · ${(d.triangles / 1000).toFixed(0)}k tris · ${d.geometries} geo\n` +
+        (q && engine ? `res: ${Math.round(engine.renderScale * 100)}% · view ${this.game.state.renderDistance} chunks · shader ${this.game.state.settings.shaderTier}${q.governor.log.length ? ' · ' + q.governor.log[q.governor.log.length - 1] : ''}\n` : '') +
         perf.report(7).join('\n') + '\n';
     }
 

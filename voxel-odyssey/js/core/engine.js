@@ -144,6 +144,10 @@ export class Engine {
         this.renderer.autoClear = true;
       }
       if (perf) {
+        // Whole-frame draw statistics, kept for the debug overlay (the HUD runs
+        // before this frame's render, so it reads the previous frame's).
+        const ri = this.renderer.info;
+        perf.draw = { calls: ri.render.calls, triangles: ri.render.triangles, geometries: ri.memory.geometries };
         const f2 = perf.now();
         perf.add('update', f1 - f0);
         perf.add('render', f2 - f1);          // CPU time to SUBMIT the frame, not GPU time

@@ -51,10 +51,20 @@ export const LIGHT_CURVE_GLSL = /* glsl */`
 `;
 
 const VERT = /* glsl */`
-  attribute vec3 aColor;
-  attribute vec2 aLight;   // x = skylight 0..1, y = blocklight 0..1
-  attribute float aAO;     // 0..1 ambient-occlusion multiplier
-  attribute float aTexIdx; // atlas tile index (-1 = untextured)
+  // Two vertex layouts feed this shader. Chunk meshes use the COMPACT one
+  // (16 bytes a vertex; see world/vertexPack.js). The held item (and any other
+  // hand-built geometry) keeps the plain float layout, because its positions
+  // are arbitrary and it is one small mesh, not a thousand.
+  #ifdef COMPACT
+    attribute vec4 aPos;     // x, y, z in 1/256 block; w = texture layer + 1 (0 = none)
+    attribute vec4 aCol;     // r/2, g/2, b/2 (normalised); a = uv corner code (u + 2v)
+    attribute vec4 aMisc;    // skylight, blocklight, ao (normalised); a = face / 5
+  #else
+    attribute vec3 aColor;
+    attribute vec2 aLight;   // x = skylight 0..1, y = blocklight 0..1
+    attribute float aAO;     // 0..1 ambient-occlusion multiplier
+    attribute float aTexIdx; // atlas tile index (-1 = untextured)
+  #endif
 
   varying vec3 vColor;
   varying vec2 vLight;
@@ -70,12 +80,29 @@ const VERT = /* glsl */`
 
   #include <fog_pars_vertex>
 
+  #ifdef COMPACT
+    const vec3 FACE_NORMALS[6] = vec3[6](
+      vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0),
+      vec3(0.0, -1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+  #endif
+
   void main() {
-    vColor = aColor;
-    vLight = aLight;
-    vAO = aAO;
+    #ifdef COMPACT
+      vec3 position = aPos.xyz * (1.0 / 256.0);
+      vec3 normal = FACE_NORMALS[int(aMisc.w * 5.0 + 0.5)];
+      float code = floor(aCol.a * 255.0 + 0.5);
+      vec2 uv = vec2(mod(code, 2.0), floor(code * 0.5));
+      vColor = aCol.rgb * 2.0;
+      vLight = aMisc.xy;
+      vAO = aMisc.z;
+      vTexIdx = aPos.w - 1.0;
+    #else
+      vColor = aColor;
+      vLight = aLight;
+      vAO = aAO;
+      vTexIdx = aTexIdx;
+    #endif
     vUv = uv;
-    vTexIdx = aTexIdx;
     // World-space normal for the sun term. mat3(modelMatrix) rather than
     // normalMatrix because normalMatrix goes to VIEW space, and the sun
     // direction uniform is a world-space vector. Chunk meshes only translate
@@ -358,7 +385,7 @@ export function createVoxelMaterials(shared) {
 
     const m = new THREE.ShaderMaterial(Object.assign({
       uniforms,
-      defines: { QUALITY: 2 },
+      defines: { QUALITY: 2, COMPACT: 1 },
       vertexShader: VERT,
       fragmentShader: FRAG,
       fog: true,
@@ -409,6 +436,7 @@ export function createVoxelMaterials(shared) {
   const viewmodel = mk({
     name: 'voxel-viewmodel',
     fog: false,
+    defines: { QUALITY: 2 },          // float vertex layout (no COMPACT): see VERT
   }, {
     uViewmodel: { value: 1 },
   });

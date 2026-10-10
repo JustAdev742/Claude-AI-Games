@@ -32,6 +32,7 @@ import { chunkKey, chunkKeyX, chunkKeyZ, voxelKey, clamp } from '../core/utils.j
 import { LightEngine } from './lighting.js';
 import { createSharedUniforms, createVoxelMaterials, updateVoxelUniforms, setShaderTier } from '../render/material.js';
 import { MeshPool } from './meshPool.js';
+import { packBucket } from './vertexPack.js';
 
 // Chunks that must be meshed before the loading screen lifts. The rest of the
 // view distance streams in while you play, nearest first, hidden by fog; making
@@ -799,7 +800,10 @@ export class World {
       return;
     }
     if (!data) return;
-    this._uploadChunkGeometry(chunk, data);
+    // Same compact format the worker produces, so both paths share one upload.
+    this._uploadChunkGeometry(chunk, {
+      opaque: packBucket(data.opaque), water: packBucket(data.water), cross: packBucket(data.cross),
+    });
   }
 
   /* Turn meshed buckets into GPU geometry. Split out from _buildChunkMesh so
@@ -822,14 +826,13 @@ export class World {
     if (events) events.emit('chunk:meshed', { cx: chunk.cx, cz: chunk.cz });
   }
 
-  // Build/replace a single bucket mesh from plain mesher arrays. Returns the
-  // new mesh (or null if the bucket is empty). Disposes the old geometry.
-  _swapBucket(oldMesh, bucket, material, chunk, scene, name) {
+  // Build/replace a single bucket mesh from a packed bucket (see
+  // vertexPack.js). Returns the new mesh (or null if the bucket is empty).
+  // Disposes the old geometry.
+  _swapBucket(oldMesh, packed, material, chunk, scene, name) {
     const T = this.THREE;
-    const hasData = bucket && bucket.positions && bucket.positions.length > 0
-      && bucket.indices && bucket.indices.length > 0;
 
-    if (!hasData) {
+    if (!packed) {
       // Nothing to draw — tear down any previous mesh for this bucket.
       if (oldMesh) {
         if (scene) scene.remove(oldMesh);
@@ -838,24 +841,13 @@ export class World {
       return null;
     }
 
-    // Worker results already arrive as typed arrays (transferred, not copied);
-    // main-thread meshing produces plain arrays. Wrapping only when needed
-    // avoids a redundant copy of every chunk's vertex data on the worker path.
-    const f32 = (a) => (a instanceof Float32Array ? a : new Float32Array(a));
-    const u32 = (a) => (a instanceof Uint32Array ? a : new Uint32Array(a));
-
     const geom = new T.BufferGeometry();
-    geom.setAttribute('position', new T.BufferAttribute(f32(bucket.positions), 3));
-    geom.setAttribute('normal', new T.BufferAttribute(f32(bucket.normals), 3));
-    // Custom attribute names (aColor/aLight/aAO/aTexIdx) rather than Three's
-    // built-in `color`: the voxel shader declares them itself, and reusing the
-    // built-in name would collide with the vertexColors machinery.
-    geom.setAttribute('aColor', new T.BufferAttribute(f32(bucket.colors), 3));
-    geom.setAttribute('aLight', new T.BufferAttribute(f32(bucket.light), 2));
-    geom.setAttribute('aAO', new T.BufferAttribute(f32(bucket.ao), 1));
-    geom.setAttribute('uv', new T.BufferAttribute(f32(bucket.uv), 2));
-    geom.setAttribute('aTexIdx', new T.BufferAttribute(f32(bucket.texIdx), 1));
-    geom.setIndex(new T.BufferAttribute(u32(bucket.indices), 1));
+    // 16 bytes a vertex in three streams. Custom names, not Three's built-in
+    // position/normal/uv/color: the shader decodes these itself (COMPACT).
+    geom.setAttribute('aPos', new T.BufferAttribute(packed.pos, 4, false));
+    geom.setAttribute('aCol', new T.BufferAttribute(packed.col, 4, true));
+    geom.setAttribute('aMisc', new T.BufferAttribute(packed.misc, 4, true));
+    geom.setIndex(new T.BufferAttribute(packed.indices, 1));
     // Every chunk spans the same local box, so share one bounding sphere instead
     // of scanning the vertices to compute a tight one on the main thread.
     geom.boundingSphere = CHUNK_SPHERE.clone();

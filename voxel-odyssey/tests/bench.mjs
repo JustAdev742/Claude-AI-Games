@@ -115,7 +115,7 @@ try {
             cpuMs: Object.fromEntries(Object.entries(g.perf.avg).map(([k, v]) => [k, +v.toFixed(2)])),
             worstMs: Object.fromEntries(Object.entries(g.perf.worst).map(([k, v]) => [k, +v.toFixed(1)]).filter(([, v]) => v > 8)),
             draw: { calls: info.render.calls, triangles: info.render.triangles, geometries: info.memory.geometries, newGeometries: info.memory.geometries - startGeo },
-            tris: (() => { const o = { opaque: 0, water: 0, cross: 0, verts: 0 }; for (const set of g.world.meshes.values()) for (const k of ['opaque', 'water', 'cross']) { const m = set[k]; if (m) { o[k] += m.geometry.index.count / 3; o.verts += m.geometry.attributes.position.count; } } return o; })(),
+            tris: (() => { const o = { opaque: 0, water: 0, cross: 0, verts: 0, bytes: 0 }; for (const set of g.world.meshes.values()) for (const k of ['opaque', 'water', 'cross']) { const m = set[k]; if (m) { o[k] += m.geometry.index.count / 3; o.verts += m.geometry.attributes.aPos.count; for (const a of Object.values(m.geometry.attributes)) o.bytes += a.array.byteLength; o.bytes += m.geometry.index.array.byteLength; } } return o; })(),
             chunks: g.world.chunks.size, meshes: g.world.meshes.size, workers: g.world.meshPool.enabled,
             heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1048576).toFixed(0) : null,
           });

@@ -133,11 +133,11 @@ async function main() {
       const g = window.GAME; const layer = g.world.atlas.layerFor(g.blocks.ID.LOG, 0);
       let hits = 0;
       g.scene.traverse((o) => {
-        if (!o.isMesh || !o.geometry || !o.geometry.attributes.aTexIdx) return;
-        const a = o.geometry.attributes, pos = a.position;
-        for (let i = 0; i < a.aTexIdx.count; i++) {
-          if (a.aTexIdx.getX(i) !== layer) continue;
-          const wx = pos.getX(i) + o.position.x, wy = pos.getY(i) + o.position.y, wz = pos.getZ(i) + o.position.z;
+        if (!o.isMesh || !o.geometry || !o.geometry.attributes.aPos) return;
+        const pos = o.geometry.attributes.aPos;        // compact format: x,y,z in 1/256 block, w = layer + 1
+        for (let i = 0; i < pos.count; i++) {
+          if (pos.getW(i) - 1 !== layer) continue;
+          const wx = pos.getX(i) / 256 + o.position.x, wy = pos.getY(i) / 256 + o.position.y, wz = pos.getZ(i) / 256 + o.position.z;
           if (wx >= t.place.x - 0.01 && wx <= t.place.x + 1.01 && wz >= t.place.z - 0.01 && wz <= t.place.z + 1.01 && wy >= t.place.y && wy <= t.place.y + 4) hits++;
         }
       });
