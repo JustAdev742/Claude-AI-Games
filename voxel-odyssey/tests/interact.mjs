@@ -50,7 +50,8 @@ async function main() {
     await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.GAME && window.GAME.player, { timeout: 20000 });
     await page.evaluate(() => window.GAME.events.emit('game:new', { seed: 'interact', gamemode: 'survival' }));
-    await sleep(3500); // let spawn ring stream
+    await page.waitForFunction(() => document.getElementById('loading-screen').classList.contains('hidden'), null, { timeout: 120000 });
+    await sleep(800);
 
     // ---- API-level operations ----
     const ops = await page.evaluate(async () => {

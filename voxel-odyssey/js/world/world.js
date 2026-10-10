@@ -113,11 +113,16 @@ export class World {
     // procedural set) is loaded. The mesher and shader both handle null.
     this.atlas = null;
 
-    // Worker pool for chunk meshing. Meshing is the largest single block of
-    // main-thread work during streaming; moving it off-thread is what stops
-    // flying into new terrain from stuttering. Falls back to synchronous
-    // meshing when Workers aren't available.
+    // Worker pool for chunk meshing and terrain generation. These are the two
+    // largest blocks of main-thread work during streaming; moving them
+    // off-thread is what stops flying into new terrain from stuttering. Falls
+    // back to doing both synchronously when Workers aren't available.
     this.meshPool = new MeshPool(this);
+
+    // Chunks whose generation has been handed to a worker and not yet adopted.
+    // Stops the streaming plan from asking twice for the same chunk.
+    this._genPending = new Set();
+    this._keepLim = Infinity;   // squared chunk distance beyond which arrivals are discarded
 
     // Streaming bookkeeping.
     this._anchorCX = 0;
@@ -182,6 +187,7 @@ export class World {
     this.remeshQueue.clear();
     this._ringCX = NaN; this._ringCZ = NaN;
     this._plan = null; this._planIdx = 0;
+    this._genPending.clear();
     this._order = []; this._orderIdx = 0; this._orderStamp = -1;
     // Drop any in-flight light propagation — it references chunks that no
     // longer exist, and stale queue entries would dirty the new world's chunks.
@@ -210,9 +216,18 @@ export class World {
     return this.chunks.get(chunkKey(cx, cz)) || null;
   }
 
+  // Has the terrain under this world column streamed in yet? Callers that only
+  // want to read blocks if they are already there (mobs, say) check this first,
+  // because reading a block of an unloaded chunk generates it on the spot.
+  isLoadedAt(wx, wz) {
+    return this.chunks.has(chunkKey(Math.floor(wx / CHUNK_SX), Math.floor(wz / CHUNK_SZ)));
+  }
+
   // Create + generate + apply in-range edits for a chunk if it isn't loaded.
   // Generation is deterministic and cheap, so calling this from getBlock to
-  // furnish neighbour data for border meshing is safe.
+  // furnish neighbour data for border meshing is safe. This is the synchronous
+  // path (the streaming plan normally has workers generate chunks instead); a
+  // worker result that arrives later for a chunk made here is discarded.
   ensureChunk(cx, cz) {
     const key = chunkKey(cx, cz);
     let chunk = this.chunks.get(key);
@@ -230,6 +245,49 @@ export class World {
         console.error('worldgen.generateChunk failed', err);
       }
     }
+    this._finishChunk(chunk, g0);
+    return chunk;
+  }
+
+  // A worker finished generating a chunk's terrain: wrap the arrays in a Chunk
+  // and finish it the same way a synchronously generated one is.
+  _adoptGenerated(msg) {
+    const key = chunkKey(msg.cx, msg.cz);
+    this._genPending.delete(key);
+    if (this.chunks.has(key)) return;               // the world needed it at once and made it itself
+    const dx = msg.cx - this._ringCX, dz = msg.cz - this._ringCZ;
+    if (dx * dx + dz * dz > this._keepLim) return;  // the player has moved on since it was requested
+
+    const perf = this.game && this.game.perf;
+    const g0 = perf ? perf.now() : 0;
+    const chunk = new Chunk(msg.cx, msg.cz);
+    chunk.blocks = msg.blocks;
+    chunk.climate = msg.climate || null;
+    chunk.empty = !!msg.empty;
+    this.chunks.set(key, chunk);
+    this._finishChunk(chunk, g0);
+  }
+
+  // The pool will not generate this chunk after all (it already exists, or the
+  // job failed). On failure make it here so it is never missing for good.
+  _onGenDropped(key, failed) {
+    this._genPending.delete(key);
+    if (!failed) return;
+    const cx = chunkKeyX(key), cz = chunkKeyZ(key);
+    const dx = cx - this._ringCX, dz = cz - this._ringCZ;
+    if (dx * dx + dz * dz <= this._keepLim) this.ensureChunk(cx, cz);
+  }
+
+  // The workers went away with generation jobs outstanding. Forget them and
+  // walk the plan again; with no pool the plan loop generates what is missing.
+  _onGenLost() {
+    this._genPending.clear();
+    this._planIdx = 0;
+  }
+
+  // Shared tail of both paths: edits, light, and telling neighbours.
+  _finishChunk(chunk, g0) {
+    const perf = this.game && this.game.perf;
     chunk.generated = true;
 
     // Overlay any saved/player edits that fall inside this chunk's columns.
@@ -246,7 +304,6 @@ export class World {
 
     chunk.dirty = true;
     this._onChunkLoaded(chunk);
-    return chunk;
   }
 
   // Re-apply the stored edits that fall inside this chunk. Edits are kept in
@@ -560,15 +617,49 @@ export class World {
     if (acx !== this._ringCX || acz !== this._ringCZ || rd !== this._ringRD) this._replan(acx, acz, rd);
     const budget = this._primed ? (settings.streamBudgetMs || STREAM_BUDGET_MS) : PRIME_BUDGET_MS;
     const plan = this._plan;
+    const pool = this.meshPool;
     if (plan && this._planIdx < plan.length) {
-      const t0 = performance.now();
-      while (this._planIdx < plan.length) {
-        const cx = this._ringCX + plan[this._planIdx], cz = this._ringCZ + plan[this._planIdx + 1];
-        this._planIdx += 2;
-        if (!this.chunks.has(chunkKey(cx, cz))) {
-          this.ensureChunk(cx, cz);
-          if (performance.now() - t0 > budget) break;   // always makes at least one chunk of progress
+      if (pool.enabled) {
+        // With workers, hand the whole plan over at once: it is a few hundred
+        // map inserts, and the pool runs them nearest-first. The expensive part
+        // happens off-thread.
+        while (this._planIdx < plan.length) {
+          const dx = plan[this._planIdx], dz = plan[this._planIdx + 1];
+          this._planIdx += 2;
+          const cx = this._ringCX + dx, cz = this._ringCZ + dz;
+          const key = chunkKey(cx, cz);
+          if (this.chunks.has(key) || this._genPending.has(key)) continue;
+          this._genPending.add(key);
+          pool.requestGen(cx, cz, dx * dx + dz * dz);
         }
+      } else {
+        const t0 = performance.now();
+        while (this._planIdx < plan.length) {
+          const cx = this._ringCX + plan[this._planIdx], cz = this._ringCZ + plan[this._planIdx + 1];
+          this._planIdx += 2;
+          if (!this.chunks.has(chunkKey(cx, cz))) {
+            this.ensureChunk(cx, cz);
+            if (performance.now() - t0 > budget) break;   // always makes at least one chunk of progress
+          }
+        }
+      }
+    }
+    // Terrain the workers finished: edits + lighting happen here, a few chunks
+    // per frame under the same budget.
+    pool.update(acx, acz);
+    const d0 = performance.now();
+    pool.drainGenerated(budget);
+    // While the loading screen is up the main thread has nothing better to do,
+    // so it generates alongside the workers (nearest unstarted chunk first). On
+    // a machine with few cores that is a large part of the first-load speed.
+    if (!this._primed && pool.enabled) {
+      for (;;) {
+        if (performance.now() - d0 > budget) break;
+        const job = pool.stealGen();
+        if (!job) break;
+        const key = chunkKey(job.cx, job.cz);
+        this._genPending.delete(key);
+        if (!this.chunks.has(key)) this.ensureChunk(job.cx, job.cz);
       }
     }
     const w1 = perf ? perf.now() : 0;
@@ -590,7 +681,6 @@ export class World {
     // 3) Process a bounded slice of the remesh queue, nearest-first, and
     //    upload finished worker meshes under their own time budget.
     this._processRemeshQueue(acx, acz, 3);
-    this.meshPool.update(acx, acz);
     this.meshPool.drainUploads(UPLOAD_BUDGET_MS);
     if (perf) {
       perf.add('w.stream', w1 - w0);     // plan + chunk generation
@@ -633,6 +723,10 @@ export class World {
   // chunks that just came into view.
   _replan(acx, acz, rd) {
     this._ringCX = acx; this._ringCZ = acz; this._ringRD = rd;
+    // Generation that has not started is stale now (the plan is about to be
+    // rebuilt around the new position); started jobs finish and are adopted if
+    // still in range.
+    for (const key of this.meshPool.cancelQueuedGen()) this._genPending.delete(key);
     // Chunk DATA is generated one chunk beyond what is drawn: a chunk is meshed
     // only once all eight neighbours exist, so the outermost drawn chunks have
     // real terrain next to them instead of triggering on-demand generation.
@@ -640,6 +734,7 @@ export class World {
     this._planIdx = 0;
 
     const lim = (rd + 1 + UNLOAD_MARGIN + 0.5) * (rd + 1 + UNLOAD_MARGIN + 0.5);
+    this._keepLim = lim;
     let doomed = null;
     for (const [key, c] of this.chunks) {
       const dx = c.cx - acx, dz = c.cz - acz;

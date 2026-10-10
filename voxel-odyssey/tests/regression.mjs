@@ -32,7 +32,8 @@ try {
   await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => window.GAME && window.GAME.player, { timeout: 25000 });
   await page.evaluate(() => window.GAME.events.emit('game:new', { seed: 'fixes', gamemode: 'creative' }));
-  await sleep(4000);
+  await page.waitForFunction(() => document.getElementById('loading-screen').classList.contains('hidden'), null, { timeout: 120000 });
+  await sleep(800);
 
   /* ---- 1. WASD directions match where the camera is pointing ---- */
   const movement = await page.evaluate(async () => {

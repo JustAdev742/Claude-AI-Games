@@ -63,7 +63,10 @@ async function openGame(browser, errors, denyLock) {
   await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => window.GAME && window.GAME.player, { timeout: 20000 });
   await page.evaluate(() => window.GAME.events.emit('game:new', { seed: 'e2e-controls', gamemode: 'survival' }));
-  await sleep(3500);
+  // Wait for the world to be playable, not for a fixed time: streaming speed
+  // varies a lot between machines.
+  await page.waitForFunction(() => document.getElementById('loading-screen').classList.contains('hidden'), null, { timeout: 120000 });
+  await sleep(800);
   return { ctx, page };
 }
 
@@ -218,20 +221,32 @@ async function main() {
       window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', bubbles: true }));
       window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
     });
-    await sleep(3000);
-    const swim = await a.page.evaluate(() => {
+    // Poll instead of sampling once after a fixed delay: holding W + Space keeps
+    // the player walking and hopping, so a single late sample catches them at a
+    // random point of a hop (or already off the end of the test platform).
+    const swim = await a.page.evaluate(() => new Promise((resolve) => {
       const g = window.GAME;
       const { wx, wz, h } = window.__well;
-      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', bubbles: true }));
-      window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }));
-      const fx = Math.floor(g.player.position.x), fz = Math.floor(g.player.position.z);
-      return {
-        y: +g.player.position.y.toFixed(2),
-        bankTop: h + 1,
-        outOfWell: !(fx === wx && fz === wz),
-        climbed: g.player.position.y >= h + 0.9,
+      const t0 = performance.now();
+      let reached = null, last = null;
+      const poll = () => {
+        const fx = Math.floor(g.player.position.x), fz = Math.floor(g.player.position.z);
+        last = {
+          y: +g.player.position.y.toFixed(2),
+          bankTop: h + 1,
+          outOfWell: !(fx === wx && fz === wz),
+          climbed: g.player.position.y >= h + 0.9,
+        };
+        // Out of the well AND up at bank level at the same moment.
+        if (last.outOfWell && last.climbed) reached = reached || last;
+        if (reached || performance.now() - t0 > 6000) {
+          window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', bubbles: true }));
+          window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }));
+          resolve(reached || last);
+        } else setTimeout(poll, 50);
       };
-    });
+      poll();
+    }));
 
     // ---- holding jump hops on land ---------------------------------------
     await a.page.evaluate(() => {

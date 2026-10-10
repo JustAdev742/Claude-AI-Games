@@ -67,10 +67,14 @@ class IntQueue {
   get length() { return (this.tail - this.head) / this.stride; }
   get isEmpty() { return this.head >= this.tail; }
 
-  push(...vals) {
+  // Fixed parameters, not `...vals`: a rest array would be allocated for every
+  // one of the millions of pushes a world load makes.
+  push(a, b, c, d) {
     if (this.tail + this.stride > this.data.length) this._grow();
-    for (let i = 0; i < this.stride; i++) this.data[this.tail + i] = vals[i];
-    this.tail += this.stride;
+    const data = this.data, t = this.tail;
+    data[t] = a; data[t + 1] = b; data[t + 2] = c;
+    if (this.stride === 4) data[t + 3] = d;
+    this.tail = t + this.stride;
   }
 
   // Reads the next record into the caller-supplied array to avoid allocating.
@@ -108,6 +112,34 @@ const NEIGHBOURS = [
   [0, 0, -1],
 ];
 const DOWN = 1;
+// Index distance between x-adjacent voxels in a chunk's arrays (z-adjacent is CHUNK_SY).
+const STRIDE_X = CHUNK_SZ * CHUNK_SY;
+// The same offsets as typed arrays, for the hot loops.
+const DX = new Int8Array(NEIGHBOURS.map((d) => d[0]));
+const DY = new Int8Array(NEIGHBOURS.map((d) => d[1]));
+const DZ = new Int8Array(NEIGHBOURS.map((d) => d[2]));
+
+/* How much light a block absorbs when light passes through it, and how much it
+   emits, as 256-entry tables built on first use. The propagation loops ask this
+   about every voxel they touch, so a registry lookup (and its property reads)
+   per question was a large share of the cost of lighting a chunk. */
+let OPACITY = null;
+let EMISSION = null;
+function buildTables() {
+  OPACITY = new Uint8Array(256);
+  EMISSION = new Uint8Array(256);
+  for (let id = 0; id < 256; id++) {
+    EMISSION[id] = id === ID.AIR ? 0 : Blocks.light(id) | 0;
+    if (id === ID.AIR) { OPACITY[id] = 0; continue; }
+    const d = Blocks.get(id);
+    if (!d) { OPACITY[id] = MAX_LIGHT; continue; }
+    if (d.render === 'cross' || d.render === 'air') { OPACITY[id] = 0; continue; }
+    // A transparent block's declared opacity is its true attenuation; an
+    // opaque cube always blocks fully regardless of what it declares.
+    if (d.transparent || d.liquid) OPACITY[id] = Math.max(0, Math.min(MAX_LIGHT, d.opacity));
+    else OPACITY[id] = MAX_LIGHT;
+  }
+}
 
 export class LightEngine {
   /**
@@ -238,14 +270,8 @@ export class LightEngine {
      cross-shaped plants are free; glass and water dim slightly; solid blocks
      stop light entirely. */
   _opacity(id) {
-    if (id === ID.AIR) return 0;
-    const d = Blocks.get(id);
-    if (!d) return MAX_LIGHT;
-    if (d.render === 'cross' || d.render === 'air') return 0;
-    // A transparent block's declared opacity is its true attenuation; an
-    // opaque cube always blocks fully regardless of what it declares.
-    if (d.transparent || d.liquid) return Math.max(0, Math.min(MAX_LIGHT, d.opacity));
-    return MAX_LIGHT;
+    if (OPACITY === null) buildTables();
+    return OPACITY[id & 0xff];
   }
 
   /* --------------------------------------------------------------------
@@ -260,7 +286,10 @@ export class LightEngine {
     const ox = chunk.cx * CHUNK_SX;
     const oz = chunk.cz * CHUNK_SZ;
 
-    chunk.light.fill(0);
+    if (OPACITY === null) buildTables();
+    const OP = OPACITY;
+    const blocks = chunk.blocks, light = chunk.light;
+    light.fill(0);
     this._invalidateMemo();
 
     // --- skylight column seeding -------------------------------------
@@ -271,7 +300,7 @@ export class LightEngine {
         let level = MAX_LIGHT;
         for (let y = CHUNK_SY - 1; y >= 0; y--) {
           const i = localIndex(lx, y, lz);
-          const op = this._opacity(chunk.blocks[i]);
+          const op = OP[blocks[i]];
           if (op >= MAX_LIGHT) {
             // Fully blocked: everything below starts dark and only gets light
             // by spreading sideways from an opening.
@@ -280,7 +309,7 @@ export class LightEngine {
             level = Math.max(0, level - op);
           }
           if (level <= 0) continue;  // array is already zeroed by fill(0)
-          chunk.light[i] = (chunk.light[i] & 0x0f) | (level << 4);
+          light[i] = (light[i] & 0x0f) | (level << 4);
         }
       }
     }
@@ -297,25 +326,23 @@ export class LightEngine {
         const onBorder = lx === 0 || lx === CHUNK_SX - 1 || lz === 0 || lz === CHUNK_SZ - 1;
         for (let y = 0; y < CHUNK_SY; y++) {
           const i = localIndex(lx, y, lz);
-          const level = (chunk.light[i] >> 4) & 0x0f;
+          const level = (light[i] >> 4) & 0x0f;
           if (level <= 0) continue;
 
           if (onBorder) { this._skyAdd.push(ox + lx, y, oz + lz); continue; }
 
           // Interior: enqueue only if some neighbour is darker than this voxel
-          // can make it, i.e. there is a shadow to fill in.
+          // can make it, i.e. there is a shadow to fill in. Neighbours are
+          // reached by index offset (the horizontal ones always exist here).
+          const down = level === MAX_LIGHT ? MAX_LIGHT : level - 1;
+          const reach = level - 1;
           let frontier = false;
-          for (let k = 0; k < NEIGHBOURS.length && !frontier; k++) {
-            const d = NEIGHBOURS[k];
-            const ny = y + d[1];
-            if (ny < 0 || ny >= CHUNK_SY) continue;
-            const ni = localIndex(lx + d[0], ny, lz + d[2]);
-            const nBlock = chunk.blocks[ni];
-            if (this._opacity(nBlock) >= MAX_LIGHT) continue;   // solid: no spread
-            const nLevel = (chunk.light[ni] >> 4) & 0x0f;
-            const reach = (k === DOWN && level === MAX_LIGHT) ? MAX_LIGHT : level - 1;
-            if (nLevel < reach) frontier = true;
-          }
+          if (y + 1 < CHUNK_SY && OP[blocks[i + 1]] < MAX_LIGHT && ((light[i + 1] >> 4) & 0x0f) < reach) frontier = true;
+          else if (y > 0 && OP[blocks[i - 1]] < MAX_LIGHT && ((light[i - 1] >> 4) & 0x0f) < down) frontier = true;
+          else if (OP[blocks[i + STRIDE_X]] < MAX_LIGHT && ((light[i + STRIDE_X] >> 4) & 0x0f) < reach) frontier = true;
+          else if (OP[blocks[i - STRIDE_X]] < MAX_LIGHT && ((light[i - STRIDE_X] >> 4) & 0x0f) < reach) frontier = true;
+          else if (OP[blocks[i + CHUNK_SY]] < MAX_LIGHT && ((light[i + CHUNK_SY] >> 4) & 0x0f) < reach) frontier = true;
+          else if (OP[blocks[i - CHUNK_SY]] < MAX_LIGHT && ((light[i - CHUNK_SY] >> 4) & 0x0f) < reach) frontier = true;
           if (frontier) this._skyAdd.push(ox + lx, y, oz + lz);
         }
       }
@@ -326,9 +353,9 @@ export class LightEngine {
       for (let lz = 0; lz < CHUNK_SZ; lz++) {
         for (let y = 0; y < CHUNK_SY; y++) {
           const i = localIndex(lx, y, lz);
-          const emit = Blocks.light(chunk.blocks[i]);
+          const emit = EMISSION[blocks[i]];
           if (emit > 0) {
-            chunk.light[i] = (chunk.light[i] & 0xf0) | emit;
+            light[i] = (light[i] & 0xf0) | emit;
             this._blockAdd.push(ox + lx, y, oz + lz);
           }
         }
@@ -475,28 +502,41 @@ export class LightEngine {
   }
 
   /* ---- blocklight addition ---- */
+  // The two addition loops are the hot path of both world load and torch
+  // edits, so each neighbour is resolved to (chunk, index) once and its block
+  // and light read from that, instead of three separate world-coordinate
+  // lookups per neighbour. Behaviour is identical.
   _drainBlockAddition(budget) {
     let n = 0;
-    const r = this._r3;
-    while (!this._blockAdd.isEmpty && n < budget) {
-      this._blockAdd.shift(r);
-      const [x, y, z] = r;
+    const q = this._blockAdd;
+    if (OPACITY === null) buildTables();
+    const OP = OPACITY;
+    while (q.head < q.tail && n < budget) {
+      const h = q.head, data = q.data;
+      const x = data[h], y = data[h + 1], z = data[h + 2];
+      q.head = h + 3;
       const level = this.getBlockLight(x, y, z);
       n++;
       if (level <= 1) continue;
 
-      for (const d of NEIGHBOURS) {
-        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+      for (let i = 0; i < 6; i++) {
+        const ny = y + DY[i];
         if (ny < 0 || ny >= CHUNK_SY) continue;
-        const id = this.getBlock(nx, ny, nz);
-        if (id === null) continue;               // chunk not loaded — skip
-        const op = this._opacity(id);
+        const nx = x + DX[i], nz = z + DZ[i];
+        const cx = Math.floor(nx / CHUNK_SX), cz = Math.floor(nz / CHUNK_SZ);
+        const c = this._chunkAt(cx, cz);
+        if (c === null) continue;                // chunk not loaded — skip
+        const lx = nx - cx * CHUNK_SX, lz = nz - cz * CHUNK_SZ;
+        const li = (lx * CHUNK_SZ + lz) * CHUNK_SY + ny;
+        const op = OP[c.blocks[li]];
         if (op >= MAX_LIGHT) continue;           // solid: light stops
         const target = level - 1 - op;
         if (target <= 0) continue;
-        if (this.getBlockLight(nx, ny, nz) < target) {
-          this.setBlockLight(nx, ny, nz, target);
-          this._blockAdd.push(nx, ny, nz);
+        const cur = c.light[li];
+        if ((cur & 0x0f) < target) {
+          c.light[li] = (cur & 0xf0) | target;
+          this._markDirty(cx, cz, lx, lz);
+          q.push(nx, ny, nz);
         }
       }
     }
@@ -536,21 +576,27 @@ export class LightEngine {
   /* ---- skylight addition ---- */
   _drainSkyAddition(budget) {
     let n = 0;
-    const r = this._r3;
-    while (!this._skyAdd.isEmpty && n < budget) {
-      this._skyAdd.shift(r);
-      const [x, y, z] = r;
+    const q = this._skyAdd;
+    if (OPACITY === null) buildTables();
+    const OP = OPACITY;
+    while (q.head < q.tail && n < budget) {
+      const h = q.head, data = q.data;
+      const x = data[h], y = data[h + 1], z = data[h + 2];
+      q.head = h + 3;
       const level = this.getSky(x, y, z);
       n++;
       if (level <= 0) continue;
 
-      for (let i = 0; i < NEIGHBOURS.length; i++) {
-        const d = NEIGHBOURS[i];
-        const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+      for (let i = 0; i < 6; i++) {
+        const ny = y + DY[i];
         if (ny < 0 || ny >= CHUNK_SY) continue;
-        const id = this.getBlock(nx, ny, nz);
-        if (id === null) continue;
-        const op = this._opacity(id);
+        const nx = x + DX[i], nz = z + DZ[i];
+        const cx = Math.floor(nx / CHUNK_SX), cz = Math.floor(nz / CHUNK_SZ);
+        const c = this._chunkAt(cx, cz);
+        if (c === null) continue;
+        const lx = nx - cx * CHUNK_SX, lz = nz - cz * CHUNK_SZ;
+        const li = (lx * CHUNK_SZ + lz) * CHUNK_SY + ny;
+        const op = OP[c.blocks[li]];
         if (op >= MAX_LIGHT) continue;
 
         // Sunlight falls straight down forever at full strength — that's what
@@ -559,9 +605,11 @@ export class LightEngine {
         const vertical = i === DOWN && level === MAX_LIGHT && op === 0;
         const target = vertical ? MAX_LIGHT : level - 1 - op;
         if (target <= 0) continue;
-        if (this.getSky(nx, ny, nz) < target) {
-          this.setSky(nx, ny, nz, target);
-          this._skyAdd.push(nx, ny, nz);
+        const cur = c.light[li];
+        if (((cur >> 4) & 0x0f) < target) {
+          c.light[li] = (cur & 0x0f) | (target << 4);
+          this._markDirty(cx, cz, lx, lz);
+          q.push(nx, ny, nz);
         }
       }
     }

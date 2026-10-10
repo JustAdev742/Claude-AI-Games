@@ -359,6 +359,10 @@ export class Mob {
     const world = this.game && this.game.world;
     if (!world || typeof world.isSolid !== 'function') return false;
     try {
+      // Terrain that has not streamed in yet is a wall: walking into it would
+      // generate the chunk on the main thread mid-frame, and there is nothing
+      // there to stand on yet anyway.
+      if (world.isLoadedAt && !world.isLoadedAt(wx, wz)) return true;
       return !!world.isSolid(Math.floor(wx), Math.floor(wy), Math.floor(wz));
     } catch (_) {
       return false;
@@ -572,6 +576,10 @@ export class Mob {
     const nx = this.position.x + (dx / len) * (this.halfW + 0.5);
     const nz = this.position.z + (dz / len) * (this.halfW + 0.5);
     const baseY = Math.floor(this.position.y);
+
+    // Unloaded terrain ahead is as good as a cliff: stop short of it.
+    const w0 = this.game && this.game.world;
+    if (w0 && w0.isLoadedAt && !w0.isLoadedAt(nx, nz)) return true;
 
     // Cliff: no ground within 2 blocks below the step cell.
     let groundFound = false;

@@ -48,7 +48,8 @@ async function main() {
     await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.GAME && window.GAME.player, { timeout: 20000 });
     await page.evaluate(() => window.GAME.events.emit('game:new', { seed: 'e2e-furnace', gamemode: 'survival' }));
-    await sleep(3500);
+    await page.waitForFunction(() => document.getElementById('loading-screen').classList.contains('hidden'), null, { timeout: 120000 });
+    await sleep(800);
 
     // ---- stage: flat dirt, a furnace two blocks ahead ----------------------
     const stage = await page.evaluate(() => {

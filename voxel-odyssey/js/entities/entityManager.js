@@ -276,14 +276,18 @@ export class EntityManager {
     const renderChunks = this._renderDistanceChunks();
     const despawnDist = (renderChunks + DESPAWN_MARGIN) * CHUNK_SIZE;
     const despawnDistSq = despawnDist * despawnDist;
+    const world = this.game && this.game.world;
 
     const list = this.entities;
     for (let i = list.length - 1; i >= 0; i--) {
       const mob = list[i];
       if (!mob) { list.splice(i, 1); continue; }
 
-      // Update AI/physics defensively.
-      if (!mob.removed) {
+      // Update AI/physics defensively. A mob whose terrain has not streamed in
+      // yet (the player is flying faster than chunks arrive, or it spawned at
+      // the edge) is held still: ticking it would read blocks from the missing
+      // chunk and generate it on the main thread, right in the frame.
+      if (!mob.removed && !(world && mob.position && world.isLoadedAt && !world.isLoadedAt(mob.position.x, mob.position.z))) {
         try { mob.update(dt); } catch (err) { /* never throw in hot path */ }
       }
 

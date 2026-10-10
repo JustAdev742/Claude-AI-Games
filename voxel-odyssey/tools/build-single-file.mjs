@@ -85,6 +85,10 @@ async function main() {
     // `three` is a bare specifier served by the import map at runtime; point it
     // at the vendored copy so the bundle is self-contained.
     alias: { three: path.join(ROOT, 'vendor', 'three.module.js') },
+    // The bundle runs as a module script, so `import.meta` is fine at runtime
+    // (only the from-source worker URL uses it); don't let the old target
+    // blank it out with a warning.
+    supported: { 'import-meta': true },
   });
 
   const bundled = result.outputFiles[0].text;

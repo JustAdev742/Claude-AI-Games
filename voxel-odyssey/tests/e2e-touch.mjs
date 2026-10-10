@@ -149,9 +149,19 @@ async function main() {
     await page.evaluate(() => { const p = window.GAME.player; p.velocity.set(0, 0, 0); });
     await sleep(300);
     const jc = await centre('#touch-jump');
+    // Record the peak upward speed over the whole press rather than sampling one
+    // instant: how far into the jump arc a fixed delay lands depends on frame
+    // rate, which varies a lot between machines.
+    await page.evaluate(() => {
+      window.__peakVy = -99;
+      const p = window.GAME.player;
+      const t0 = performance.now();
+      const tick = () => { window.__peakVy = Math.max(window.__peakVy, p.velocity.y); if (performance.now() - t0 < 1500) requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    });
     await down(3, jc.x, jc.y);
-    await sleep(120);
-    report.jump = await page.evaluate(() => ({ vy: window.GAME.player.velocity.y, held: window.GAME.input.touch.held.has('jump') }));
+    await sleep(400);
+    report.jump = await page.evaluate(() => ({ vy: window.__peakVy, held: window.GAME.input.touch.held.has('jump') }));
     await up(3);
     report.jumpReleased = await page.evaluate(() => !window.GAME.input.touch.held.has('jump'));
     await sleep(700);

@@ -1,10 +1,15 @@
 /* =========================================================================
-   meshPool.js — a pool of meshing workers with a nearest-first job queue.
+   meshPool.js — a pool of world workers with a nearest-first job queue.
+
+   The workers do two kinds of job (see workerCore.js): meshing chunks and
+   generating terrain. Both go through one queue, ordered by distance to the
+   player, so whichever job is nearest runs next regardless of kind — a chunk
+   that is needed soon is never stuck behind far-away terrain.
 
    Owns the worker lifecycle and the padded-neighbourhood packing that
-   mesher.worker.js expects. Falls back to synchronous meshing when workers
-   aren't available (older browsers, and Node under the unit tests), so World
-   has exactly one code path to call either way.
+   mesher.worker.js expects. Falls back to synchronous work when workers aren't
+   available (older browsers, and Node under the unit tests unless a fake
+   worker is injected), so World has exactly one code path to call either way.
 
    The queue is priority-ordered by distance to the player and re-sorted as
    the player moves, because streaming enqueues chunks faster than they can be
@@ -55,7 +60,9 @@ export class MeshPool {
     // chunkKey -> job. One outstanding job per chunk; re-queuing a chunk that
     // is already queued just updates it.
     this.queue = new Map();
-    this.inFlight = new Map();   // jobId -> { key, cx, cz, generation }
+    // Terrain generation jobs waiting for a worker: chunkKey -> { cx, cz, priority }.
+    this.genQueue = new Map();
+    this.inFlight = new Map();   // jobId -> { kind, key, cx, cz, generation }
     this._jobId = 1;
 
     // Bumped whenever the world resets or the atlas changes, so results
@@ -71,19 +78,33 @@ export class MeshPool {
     // them all at once is a hitch, so World drains this under a time budget.
     this._uploads = [];
 
-    this.stats = { queued: 0, meshed: 0, dropped: 0, fallback: 0 };
+    // Generated terrain waiting to be adopted by the world (which applies edits
+    // and lighting, a few chunks per frame under a time budget).
+    this._generated = [];
+    this._acx = 0; this._acz = 0;
+
+    this.stats = { queued: 0, meshed: 0, dropped: 0, fallback: 0, generated: 0, genMs: 0 };
   }
 
-  init() {
-    if (typeof Worker === 'undefined' || typeof URL === 'undefined') return this;
+  /* Start the workers. `opts.factory` (a function returning a Worker-like
+     object) and `opts.count` exist for tests, which run the worker code
+     in-process; in the browser both come from the environment. */
+  init(opts = {}) {
+    let make = opts.factory;
+    if (!make) {
+      if (typeof Worker === 'undefined' || typeof URL === 'undefined') return this;
+      try { make = workerFactory(); } catch (err) {
+        console.warn('mesh workers unavailable, working on the main thread', err);
+        return this;
+      }
+    }
     try {
-      const count = defaultWorkerCount();
-      const make = workerFactory();
+      const count = opts.count || defaultWorkerCount();
       for (let i = 0; i < count; i++) {
         const w = make();
         w.onmessage = (e) => this._onWorkerMessage(w, e.data);
         w.onerror = (err) => {
-          console.warn('mesh worker failed, falling back to synchronous meshing', err.message);
+          console.warn('world worker failed, falling back to the main thread', err.message);
           this.shutdown();
         };
         this.workers.push(w);
@@ -111,8 +132,10 @@ export class MeshPool {
   reset() {
     this.generation++;
     this.queue.clear();
+    this.genQueue.clear();
     this.inFlight.clear();
     this._uploads.length = 0;
+    this._generated.length = 0;
   }
 
   shutdown() {
@@ -123,19 +146,29 @@ export class MeshPool {
     // Jobs the dead workers were holding (and any still waiting) would leave
     // their chunks permanently unmeshed — they were marked clean at dispatch.
     // Hand them back to the world so it rebuilds them on the main thread.
+    // Terrain that was still being generated is the world's to redo as well.
     const lost = [];
-    for (const j of this.inFlight.values()) lost.push(j.key);
+    let genLost = false;
+    for (const j of this.inFlight.values()) {
+      if (j.kind === 'gen') genLost = true; else lost.push(j.key);
+    }
     for (const k of this.queue.keys()) lost.push(k);
+    if (this.genQueue.size > 0) genLost = true;
     this.inFlight.clear();
     this.queue.clear();
+    this.genQueue.clear();
+    this.generation++;
     for (const key of lost) {
       const c = this.world.chunks.get(key);
       if (c) { c.dirty = true; this.world.remeshQueue.add(key); }
     }
-    this.generation++;
+    // Results already received are still good; the world adopts them as usual.
+    if (genLost && this.world._onGenLost) this.world._onGenLost();
   }
 
-  get pending() { return this.queue.size + this.inFlight.size + this._uploads.length; }
+  get pending() {
+    return this.queue.size + this.genQueue.size + this.inFlight.size + this._uploads.length + this._generated.length;
+  }
 
   /* Queue a chunk. Returns false when workers are unavailable, so the caller
      can mesh it synchronously instead. */
@@ -148,11 +181,50 @@ export class MeshPool {
     return true;
   }
 
+  /* Queue terrain generation for a chunk. Returns false when workers are
+     unavailable, so the caller generates it on the main thread instead. */
+  requestGen(cx, cz, priority) {
+    if (!this.enabled) return false;
+    this.genQueue.set(chunkKey(cx, cz), { cx, cz, priority });
+    this._pump();
+    return true;
+  }
+
+  /* Take the nearest generation job that has not started, for the caller to do
+     itself. Used while the loading screen is up: the main thread has nothing
+     else to do then, and on a machine with few cores it nearly doubles the rate
+     at which the first ring of terrain appears. */
+  stealGen() {
+    let bestKey = null, best = Infinity;
+    for (const [key, job] of this.genQueue) {
+      if (job.priority < best) { best = job.priority; bestKey = key; }
+    }
+    if (bestKey === null) return null;
+    const job = this.genQueue.get(bestKey);
+    this.genQueue.delete(bestKey);
+    return job;
+  }
+
+  /* Forget generation jobs that have not started. Returns their keys so the
+     caller can drop its bookkeeping; the player moved and the plan changed, and
+     it will ask again for whatever is still wanted. */
+  cancelQueuedGen() {
+    if (this.genQueue.size === 0) return [];
+    const keys = [...this.genQueue.keys()];
+    this.genQueue.clear();
+    return keys;
+  }
+
   /* Called each frame with the player's chunk position so the queue can be
      re-prioritised as they move. */
   update(acx, acz) {
-    if (!this.enabled || this.queue.size === 0) return;
+    this._acx = acx; this._acz = acz;
+    if (!this.enabled || (this.queue.size === 0 && this.genQueue.size === 0)) return;
     for (const job of this.queue.values()) {
+      const dx = job.cx - acx, dz = job.cz - acz;
+      job.priority = dx * dx + dz * dz;
+    }
+    for (const job of this.genQueue.values()) {
       const dx = job.cx - acx, dz = job.cz - acz;
       job.priority = dx * dx + dz * dz;
     }
@@ -160,15 +232,32 @@ export class MeshPool {
   }
 
   _pump() {
-    while (this.idle.length > 0 && this.queue.size > 0) {
-      // Nearest-first. Scanning for the minimum beats keeping the map sorted:
-      // the queue is small (tens of entries) and every entry's priority
-      // changes whenever the player moves.
-      let bestKey = null, best = Infinity;
+    while (this.idle.length > 0 && (this.queue.size > 0 || this.genQueue.size > 0)) {
+      // Nearest-first across both kinds of job. Scanning for the minimum beats
+      // keeping a map sorted: the queues are small (tens to a few hundred
+      // entries) and every entry's priority changes whenever the player moves.
+      // On a tie terrain goes first, since meshing waits on it.
+      let bestKey = null, best = Infinity, genNext = false;
       for (const [key, job] of this.queue) {
         if (job.priority < best) { best = job.priority; bestKey = key; }
       }
+      for (const [key, job] of this.genQueue) {
+        if (job.priority <= best) { best = job.priority; bestKey = key; genNext = true; }
+      }
       if (bestKey === null) return;
+
+      if (genNext) {
+        const job = this.genQueue.get(bestKey);
+        this.genQueue.delete(bestKey);
+        // Already generated in the meantime (the world needed it at once).
+        if (this.world.chunks.has(bestKey)) {
+          this.stats.dropped++;
+          if (this.world._onGenDropped) this.world._onGenDropped(bestKey);
+          continue;
+        }
+        this._dispatchGen(this.idle.pop(), job, bestKey);
+        continue;
+      }
 
       const job = this.queue.get(bestKey);
       this.queue.delete(bestKey);
@@ -182,12 +271,18 @@ export class MeshPool {
     }
   }
 
+  _dispatchGen(worker, job, key) {
+    const jobId = this._jobId++;
+    this.inFlight.set(jobId, { kind: 'gen', key, cx: job.cx, cz: job.cz, generation: this.generation, worker });
+    worker.postMessage({ type: 'gen', jobId, cx: job.cx, cz: job.cz, seed: this.world.seed });
+  }
+
   _dispatch(worker, chunk, key) {
     const jobId = this._jobId++;
     const { blocks, light } = this._packNeighbourhood(chunk);
     const settings = (this.world.game && this.world.game.state && this.world.game.state.settings) || {};
 
-    this.inFlight.set(jobId, { key, cx: chunk.cx, cz: chunk.cz, generation: this.generation, worker });
+    this.inFlight.set(jobId, { kind: 'mesh', key, cx: chunk.cx, cz: chunk.cz, generation: this.generation, worker });
 
     worker.postMessage({
       type: 'mesh',
@@ -252,11 +347,23 @@ export class MeshPool {
     this.idle.push(worker);
 
     if (msg.type === 'error') {
-      console.warn(`mesh worker error for chunk ${msg.cx},${msg.cz}: ${msg.message}`);
+      console.warn(`world worker error (${msg.kind || 'job'}) for chunk ${msg.cx},${msg.cz}: ${msg.message}`);
+      // A chunk whose terrain failed to generate would never exist; let the
+      // world make it itself, on the main thread, the next time it plans.
+      if (job && job.kind === 'gen' && this.world._onGenDropped) this.world._onGenDropped(job.key, true);
       this._pump();
       return;
     }
     if (!job) { this._pump(); return; }
+
+    if (job.kind === 'gen') {
+      if (job.generation !== this.generation) { this.stats.dropped++; this._pump(); return; }
+      this.stats.generated++;
+      this.stats.genMs += msg.ms || 0;
+      this._generated.push({ key: job.key, cx: job.cx, cz: job.cz, msg });
+      this._pump();
+      return;
+    }
 
     // Discard results computed against a world or atlas that no longer exists.
     if (job.generation !== this.generation) {
@@ -270,6 +377,26 @@ export class MeshPool {
     this.stats.meshed++;
     this._uploads.push({ key: job.key, generation: job.generation, msg });
     this._pump();
+  }
+
+  /* Hand finished terrain to the world, nearest-first, until the time budget is
+     spent. Always adopts at least one so the pipeline cannot stall. */
+  drainGenerated(budgetMs) {
+    const list = this._generated;
+    if (!list.length) return;
+    if (list.length > 1) {
+      const acx = this._acx, acz = this._acz;
+      const d = (g) => (g.cx - acx) * (g.cx - acx) + (g.cz - acz) * (g.cz - acz);
+      list.sort((a, b) => d(a) - d(b));
+    }
+    const t0 = performance.now();
+    let n = 0;
+    while (n < list.length) {
+      const g = list[n++];
+      this.world._adoptGenerated(g.msg);
+      if (performance.now() - t0 > budgetMs) break;
+    }
+    list.splice(0, n);
   }
 
   /* Turn finished meshes into geometry, nearest-first-in, until the time
