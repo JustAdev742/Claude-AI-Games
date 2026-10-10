@@ -368,7 +368,10 @@ export class Particles {
   emit(x, y, z, color, count, opts) {
     if (!this._positions) return;
     if (!Array.isArray(color)) color = [1, 1, 1];
+    // Quality preset: fewer particles per effect on weak machines.
+    const st = this.game && this.game.state && this.game.state.settings;
     count = Math.max(0, count | 0);
+    if (st && typeof st.particleScale === 'number' && st.particleScale < 1 && count > 1) count = Math.max(1, Math.round(count * st.particleScale));
     opts = opts || {};
 
     const speed = opts.speed != null ? opts.speed : 2;

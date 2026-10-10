@@ -23,6 +23,20 @@ export const DEFAULT_SETTINGS = {
   viewBobbing: true,
   smoothLighting: true,
   daylightSpeed: 1.0,     // multiplier on the day/night cycle
+
+  // ---- performance (see core/quality.js) ----
+  // 'auto' picks a preset from the hardware on first run; 'low' | 'medium' |
+  // 'high' apply that bundle; 'custom' means the individual knobs were edited.
+  quality: 'auto',
+  renderScale: 1.0,       // fraction of full resolution the 3D view is drawn at
+  dynamicResolution: true, // let the game lower the scale / distance when frames are slow
+  shaderTier: 2,          // 0 cheap .. 2 full fragment shader
+  particleScale: 1.0,     // multiplier on particle counts
+  mobScale: 1.0,          // multiplier on how many mobs may exist
+  streamBudgetMs: 4,      // main-thread ms per frame spent generating terrain
+  lightBudget: 24000,     // light-propagation steps per frame
+  maxFps: 0,              // 0 = as fast as the display; else a frame cap (saves heat/battery)
+  _autoApplied: '',       // which preset the first-run detection chose (internal)
   gamemode: 'survival',   // 'survival' | 'creative'
 
   // ---- look feel ----
@@ -60,7 +74,14 @@ export class GameState {
   constructor(events) {
     this.events = events || null;
     this.ls = safeLocalStorage();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, this._loadSettings());
+    const saved = this._loadSettings();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // Settings saved by a build that predates the quality system were chosen by
+    // hand; do not let first-run detection overwrite them.
+    this.hadLegacySettings = Object.keys(saved).length > 0 && !('quality' in saved);
+    if (this.hadLegacySettings) this.settings.quality = 'custom';
+    // Values that live only for this session (the governor's current view distance).
+    this.runtime = {};
     this.stats = {
       blocksMined: 0,
       blocksPlaced: 0,
@@ -97,6 +118,13 @@ export class GameState {
     this.settings[key] = value;
     this._persistSettings();
     if (this.events) this.events.emit('settings:change', { key, value });
+  }
+  // The view distance actually in force: the player's setting, or lower while
+  // the adaptive governor is shedding load.
+  get renderDistance() {
+    const r = this.runtime && this.runtime.renderDistance;
+    const s = this.settings.renderDistance;
+    return r && r < s ? r : s;
   }
   resetSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS);

@@ -649,9 +649,21 @@ export class HUD {
 
     const facing = this._facingFromYaw(player);
 
+    // Frame profile: smoothed CPU time per section (see core/perf.js), plus what
+    // the renderer is being asked to draw.
+    const perf = this.game && this.game.perf;
+    let prof = '';
+    if (perf) {
+      const info = engine && engine.renderer ? engine.renderer.info : null;
+      prof = `frame: ${perf.frameMs.toFixed(1)} ms cpu · worst ${perf.frameWorst.toFixed(0)} · ${perf.hitches} hitches\n` +
+        (info ? `draw: ${info.render.calls} calls · ${(info.render.triangles / 1000).toFixed(0)}k tris · ${info.memory.geometries} geo\n` : '') +
+        perf.report(7).join('\n') + '\n';
+    }
+
     const txt =
       `Voxel Odyssey — debug\n` +
       `fps: ${fps.toFixed(0)}\n` +
+      prof +
       `xyz: ${x.toFixed(2)} / ${y.toFixed(2)} / ${z.toFixed(2)}\n` +
       `block: ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)}\n` +
       `chunk: ${cx}, ${cz}\n` +

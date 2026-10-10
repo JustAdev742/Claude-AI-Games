@@ -7,6 +7,15 @@
  *
  *   node tools/build-single-file.mjs [outfile] [--fragment]
  *
+ * The chunk-meshing worker is bundled separately and embedded in the page as
+ * text (<script id="mesher-worker-src" type="text/plain">); MeshPool turns it
+ * into a Blob worker at runtime. Without that, a single file has no URL to load
+ * a worker from and the game would mesh terrain on the main thread — the
+ * slowest possible option on the old machines this build is meant for.
+ *
+ * The output is minified and compiled down to browsers from about 2019 on.
+ * Pass --no-minify to get readable output for debugging.
+ *
  * --fragment emits just the style + markup + script, with no <html>/<head>/
  * <body> wrapper, for hosts that supply their own document skeleton. The
  * viewport meta is then injected at runtime since there's no <head> to put it in.
@@ -22,6 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const argv = process.argv.slice(2);
 const FRAGMENT = argv.includes('--fragment');
+const MINIFY = !argv.includes('--no-minify');
 const outArg = argv.find((a) => !a.startsWith('--'));
 const OUT = outArg
   ? path.resolve(process.cwd(), outArg)
@@ -48,11 +58,28 @@ const escapeForInlineScript = (s) => s.replace(/<\/(script)/gi, '<\\/$1');
 async function main() {
   const esbuild = await loadEsbuild();
 
+  // Older engines than es2020 would reject `?.`, `??` and friends outright, so
+  // compile them away: a syntax error in the bundle means a blank page.
+  const TARGET = 'es2018';
+
+  // The meshing worker: a self-contained classic script (no imports left).
+  const worker = await esbuild.build({
+    entryPoints: [path.join(ROOT, 'js', 'world', 'mesher.worker.js')],
+    bundle: true,
+    format: 'iife',
+    target: TARGET,
+    minify: MINIFY,
+    write: false,
+    legalComments: 'none',
+  });
+  const workerSrc = worker.outputFiles[0].text;
+
   const result = await esbuild.build({
     entryPoints: [path.join(ROOT, 'js', 'main.js')],
     bundle: true,
     format: 'esm',
-    target: 'es2020',
+    target: TARGET,
+    minify: MINIFY,
     write: false,
     legalComments: 'none',
     // `three` is a bare specifier served by the import map at runtime; point it
@@ -65,9 +92,11 @@ async function main() {
   let html = await readFile(path.join(ROOT, 'index.html'), 'utf8');
 
   // 1. stylesheet link -> inline <style>
+  // A replacement FUNCTION, not a string: minified code is full of `$`, which a
+  // string replacement would treat as a special pattern ($&, $', $1...).
   html = html.replace(
     /\s*<link rel="stylesheet" href="styles\.css"\s*\/?>/,
-    `\n  <style>\n${css}\n  </style>`,
+    () => `\n  <style>\n${css}\n  </style>`,
   );
 
   // 2. the import map is meaningless once everything is bundled
@@ -79,14 +108,20 @@ async function main() {
   const before = html;
   html = html.replace(
     /\s*import\('\.\/js\/main\.js'\)\.catch\(\(err\) => \{[^]*?\n    \}\);/,
-    '\n' + escapeForInlineScript(bundled),
+    () => '\n' + escapeForInlineScript(bundled),
   );
   if (html === before) throw new Error('inlining failed: bootstrap import not matched');
+
+  // 4. the worker source, as inert text the page can read back at runtime
+  const workerTag = `<script id="mesher-worker-src" type="text/plain">${escapeForInlineScript(workerSrc)}</script>\n  `;
+  const withWorker = html.replace(/<script type="module">/, () => workerTag + '<script type="module">');
+  if (withWorker === html) throw new Error('inlining failed: module script not found for worker tag');
+  html = withWorker;
 
   if (!html.includes('<style>')) throw new Error('inlining failed: no stylesheet in output');
   if (html.includes('importmap')) throw new Error('inlining failed: import map survived');
   if (html.includes('./js/main.js')) throw new Error('inlining failed: bootstrap survived');
-  if (html.length < 500_000) throw new Error('inlining failed: output suspiciously small');
+  if (html.length < 300_000) throw new Error('inlining failed: output suspiciously small');
 
   if (FRAGMENT) {
     const style = html.match(/<style>[^]*?<\/style>/);

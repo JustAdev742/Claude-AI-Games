@@ -1,4 +1,5 @@
 /* Iterate on the light engine in isolation before wiring it into the game. */
+import { chunkKey } from '../js/core/utils.js';
 import { LightEngine, MAX_LIGHT } from '../js/world/lighting.js';
 import { Chunk } from '../js/world/chunk.js';
 import { ID } from '../js/world/blocks.js';
@@ -153,7 +154,7 @@ function lightAll(world, eng) {
   e.onBlockChanged(14, 20, 5, ID.AIR, ID.GLOWSTONE);
   while (e.pending > 0) e.update(500000);
   ok('light crosses into next chunk', e.getBlockLight(18, 20, 5) === 10, e.getBlockLight(18, 20, 5));
-  ok('neighbour chunk marked dirty', [...e.dirtyChunks].some((k) => k === '1,0'), [...e.dirtyChunks].join(' '));
+  ok('neighbour chunk marked dirty', [...e.dirtyChunks].some((k) => k === chunkKey(1, 0)), [...e.dirtyChunks].join(' '));
 }
 
 /* ---- 6. negative coordinates behave (floor, not truncate) ---- */

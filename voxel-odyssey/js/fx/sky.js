@@ -152,7 +152,7 @@ export class Sky {
     this._buildDome();
     this._buildCelestialBodies();
     this._buildStars();
-    if (this._fancy()) this._buildClouds();
+    this.setClouds(this._fancy());
 
     scene.add(this.group);
 
@@ -301,6 +301,14 @@ export class Sky {
     this.stars.frustumCulled = false;
     this.stars.renderOrder = -950;   // behind sun/moon, in front of dome
     this.group.add(this.stars);
+  }
+
+  // Show or hide the cloud layer, building it the first time it is wanted.
+  // Clouds cost nine transparent draws and a lot of overdraw, so the low
+  // quality preset leaves them off.
+  setClouds(on) {
+    if (on && !this.cloudGroup && this.group) this._buildClouds();
+    if (this.cloudGroup) this.cloudGroup.visible = !!on;
   }
 
   _buildClouds() {
@@ -665,7 +673,7 @@ export class Sky {
         // render distance, so a fog range reaching past it shows the raw edge
         // of the loaded terrain (a hard cliff against the sky). Tie the range
         // to the setting: fully fogged just inside the last loaded chunk.
-        const st = this.game && this.game.state && this.game.state.settings;
+        const st = this.game && this.game.state;
         const rd = st && typeof st.renderDistance === 'number' ? Math.max(2, Math.min(12, st.renderDistance)) : 6;
         const reach = rd * CHUNK_SX * 0.94;
         let far = reach * lerp(0.82, 1.0, p.light);     // a little closer at night, for mood

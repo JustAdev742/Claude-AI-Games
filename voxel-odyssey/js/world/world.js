@@ -28,10 +28,38 @@ import {
   localIndex, worldToChunk,
 } from './constants.js';
 import Blocks, { ID } from './blocks.js';
-import { chunkKey, voxelKey, clamp } from '../core/utils.js';
+import { chunkKey, chunkKeyX, chunkKeyZ, voxelKey, clamp } from '../core/utils.js';
 import { LightEngine } from './lighting.js';
-import { createSharedUniforms, createVoxelMaterials, updateVoxelUniforms } from '../render/material.js';
+import { createSharedUniforms, createVoxelMaterials, updateVoxelUniforms, setShaderTier } from '../render/material.js';
 import { MeshPool } from './meshPool.js';
+
+// Chunks that must be meshed before the loading screen lifts. The rest of the
+// view distance streams in while you play, nearest first, hidden by fog; making
+// a slow machine wait for the whole ring is what made loading take so long.
+const PRIME_RADIUS = 3;
+// Main-thread time per frame spent generating chunks: small while playing so a
+// frame is never lost to terrain, large behind the loading screen.
+const STREAM_BUDGET_MS = 4;
+const PRIME_BUDGET_MS = 30;
+// Chunks are kept this far beyond the generated ring before being unloaded, so
+// walking back and forth over a boundary does not thrash.
+const UNLOAD_MARGIN = 2;
+// Cap on mesh uploads (BufferGeometry creation) per frame, in ms.
+const UPLOAD_BUDGET_MS = 3;
+
+// Local-space sphere enclosing a whole chunk column (16 x 80 x 16), for frustum culling.
+const CHUNK_SPHERE = new THREE.Sphere(
+  new THREE.Vector3(CHUNK_SX / 2, CHUNK_SY / 2, CHUNK_SZ / 2),
+  Math.hypot(CHUNK_SX / 2, CHUNK_SY / 2, CHUNK_SZ / 2) + 0.5,
+);
+
+// A Set that notices when a NEW key is added, so the sorted view of the remesh
+// queue is rebuilt only when it can have changed (not every frame).
+class KeyQueue extends Set {
+  constructor() { super(); this.stamp = 0; }
+  add(k) { if (!super.has(k)) this.stamp++; return super.add(k); }
+  clear() { this.stamp++; super.clear(); }
+}
 
 export class World {
   constructor(game) {
@@ -54,7 +82,20 @@ export class World {
 
     // Remesh work queue: chunkKeys waiting to (re)build geometry. We keep a Set
     // for dedupe and sort by distance to the anchor each frame.
-    this.remeshQueue = new Set();
+    this.remeshQueue = new KeyQueue();
+
+    // Edits indexed by chunk, so loading a chunk applies only ITS edits instead
+    // of scanning (and string-parsing) every edit ever made: chunkKey ->
+    // Map(localIndex -> block id). `edits` above stays the flat save format.
+    this._editsByChunk = new Map();
+
+    // Streaming plan: the chunks to generate, nearest first, as (dx,dz) offsets
+    // from the chunk the player was in when the plan was made.
+    this._ringCX = NaN; this._ringCZ = NaN; this._ringRD = 0;
+    this._plan = null; this._planIdx = 0;
+    this._offsetCache = new Map();           // radius -> Int16Array of (dx,dz) pairs
+    // Sorted snapshot of the remesh queue (see _processRemeshQueue).
+    this._order = []; this._orderIdx = 0; this._orderStamp = -1; this._orderCX = NaN; this._orderCZ = NaN;
 
     // Shared materials + the uniform block that drives them, created in init().
     this.matOpaque = null;
@@ -103,7 +144,14 @@ export class World {
     // pipeline as the terrain.
     this.matViewmodel = mats.viewmodel;
     this.meshPool.init();
+    const tier = this.game && this.game.state && this.game.state.settings ? this.game.state.settings.shaderTier : undefined;
+    if (typeof tier === 'number') this.setShaderTier(tier);
     return this;
+  }
+
+  // Fragment-shader quality tier (0 cheap .. 2 full) for every terrain material.
+  setShaderTier(tier) {
+    return setShaderTier({ a: this.matOpaque, b: this.matWater, c: this.matCross, d: this.matViewmodel }, tier);
   }
 
   /* Bind a texture atlas (procedural default or a loaded resource pack) and
@@ -129,7 +177,11 @@ export class World {
     this.meshes.clear();
     this.chunks.clear();
     this.edits.clear();
+    this._editsByChunk.clear();
     this.remeshQueue.clear();
+    this._ringCX = NaN; this._ringCZ = NaN;
+    this._plan = null; this._planIdx = 0;
+    this._order = []; this._orderIdx = 0; this._orderStamp = -1;
     // Drop any in-flight light propagation — it references chunks that no
     // longer exist, and stale queue entries would dirty the new world's chunks.
     this.lighting.reset();
@@ -165,6 +217,8 @@ export class World {
     let chunk = this.chunks.get(key);
     if (chunk) return chunk;
 
+    const perf = this.game && this.game.perf;
+    const g0 = perf ? perf.now() : 0;
     chunk = new Chunk(cx, cz);
     this.chunks.set(key, chunk);
 
@@ -179,6 +233,7 @@ export class World {
 
     // Overlay any saved/player edits that fall inside this chunk's columns.
     this._applyEditsInChunk(chunk);
+    const g1 = perf ? perf.now() : 0;
 
     // Flood-fill skylight + blocklight for the new voxels, then re-seed from
     // the four neighbours so light flows across the seam in both directions.
@@ -186,28 +241,33 @@ export class World {
     // a hard dark line down the shared border.
     this.lighting.lightChunk(chunk);
     this.lighting.seedFromNeighbours(chunk);
+    if (perf) { perf.add('gen', g1 - g0); perf.add('gen.light', perf.now() - g1); }
 
     chunk.dirty = true;
+    this._onChunkLoaded(chunk);
     return chunk;
   }
 
-  // Re-apply every stored edit whose (x,z) lands in this chunk. Edits are kept
-  // as world coords so they survive regeneration regardless of load order.
+  // Re-apply the stored edits that fall inside this chunk. Edits are kept in
+  // world coordinates (and indexed per chunk) so they survive regeneration
+  // regardless of load order.
   _applyEditsInChunk(chunk) {
-    if (this.edits.size === 0) return;
-    const baseX = chunk.cx * CHUNK_SX;
-    const baseZ = chunk.cz * CHUNK_SZ;
-    for (const [k, id] of this.edits) {
-      const c = k.indexOf(',');
-      const c2 = k.indexOf(',', c + 1);
-      const x = +k.slice(0, c);
-      const y = +k.slice(c + 1, c2);
-      const z = +k.slice(c2 + 1);
-      if (x < baseX || x >= baseX + CHUNK_SX) continue;
-      if (z < baseZ || z >= baseZ + CHUNK_SZ) continue;
-      if (y < 0 || y >= CHUNK_SY) continue;
-      chunk.setLocal(x - baseX, y, z - baseZ, id);
+    const mine = this._editsByChunk.get(chunkKey(chunk.cx, chunk.cz));
+    if (!mine) return;
+    for (const [idx, id] of mine) {
+      const y = idx % CHUNK_SY;
+      const col = (idx - y) / CHUNK_SY;
+      const lz = col % CHUNK_SZ;
+      const lx = (col - lz) / CHUNK_SZ;
+      chunk.setLocal(lx, y, lz, id);
     }
+  }
+
+  _indexEdit(cx, cz, lx, y, lz, id) {
+    const k = chunkKey(cx, cz);
+    let m = this._editsByChunk.get(k);
+    if (!m) { m = new Map(); this._editsByChunk.set(k, m); }
+    m.set(localIndex(lx, y, lz), id);
   }
 
   /* ---- voxel read/write ------------------------------------------------- */
@@ -271,6 +331,7 @@ export class World {
     // Write the voxel and record the diff so it survives save/regeneration.
     chunk.setLocal(lx, wy, lz, id);
     this.edits.set(voxelKey(wx, wy, wz), id);
+    this._indexEdit(cx, cz, lx, wy, lz, id);
 
     // Propagate the lighting consequences. Breaking a roof lets daylight down
     // the column; placing one casts a shadow; adding/removing a torch floods
@@ -469,7 +530,10 @@ export class World {
     // Defensive: never throw in the hot path.
     if (!anchor) return;
     const settings = (this.game && this.game.state && this.game.state.settings) || {};
-    const rd = clamp((settings.renderDistance | 0) || 6, 2, 12);
+    // The player's view distance, or lower while the adaptive governor is
+    // shedding load (state.renderDistance accounts for both).
+    const rdSetting = this.game && this.game.state ? this.game.state.renderDistance : settings.renderDistance;
+    const rd = clamp((rdSetting | 0) || 6, 2, 12);
 
     const acx = Math.floor(anchor.x / CHUNK_SX);
     const acz = Math.floor(anchor.z / CHUNK_SZ);
@@ -483,45 +547,35 @@ export class World {
       updateVoxelUniforms(this.uniforms, sky.getTerrainLight());
     }
 
-    // 1) Ensure every chunk within render distance exists + is queued to mesh.
-    //    Track how many of the in-range ring still need a mesh, for progress.
-    let needed = 0;
-    let ready = 0;
-    for (let dz = -rd; dz <= rd; dz++) {
-      for (let dxc = -rd; dxc <= rd; dxc++) {
-        // Use a round-ish disc so corners don't load unnecessarily.
-        if (dxc * dxc + dz * dz > (rd + 0.5) * (rd + 0.5)) continue;
-        const cx = acx + dxc;
-        const cz = acz + dz;
-        const key = chunkKey(cx, cz);
-        needed++;
-        this.ensureChunk(cx, cz);
-        const meshSet = this.meshes.get(key);
-        const chunk = this.chunks.get(key);
-        if (meshSet && !(chunk && chunk.dirty)) {
-          ready++;
-        } else {
-          this._queueRemesh(cx, cz);
+    const perf = this.game && this.game.perf;
+    const w0 = perf ? perf.now() : 0;
+
+    // 1) Streaming. The plan (which chunks to load, nearest first) is rebuilt
+    //    only when the player crosses a chunk border or the view distance
+    //    changes — not scanned every frame — and executed under a time budget,
+    //    so walking into new terrain costs a few ms per frame instead of one
+    //    long hitch when a whole row of chunks generates at once.
+    if (acx !== this._ringCX || acz !== this._ringCZ || rd !== this._ringRD) this._replan(acx, acz, rd);
+    const budget = this._primed ? (settings.streamBudgetMs || STREAM_BUDGET_MS) : PRIME_BUDGET_MS;
+    const plan = this._plan;
+    if (plan && this._planIdx < plan.length) {
+      const t0 = performance.now();
+      while (this._planIdx < plan.length) {
+        const cx = this._ringCX + plan[this._planIdx], cz = this._ringCZ + plan[this._planIdx + 1];
+        this._planIdx += 2;
+        if (!this.chunks.has(chunkKey(cx, cz))) {
+          this.ensureChunk(cx, cz);
+          if (performance.now() - t0 > budget) break;   // always makes at least one chunk of progress
         }
       }
     }
+    const w1 = perf ? perf.now() : 0;
 
-    // 2) Unload chunks beyond render distance + 1 (free CPU + GPU memory).
-    const unloadR = rd + 1;
-    for (const key of [...this.chunks.keys()]) {
-      const ck = this._keyCoords(key);
-      const ddx = ck.cx - acx;
-      const ddz = ck.cz - acz;
-      if (ddx * ddx + ddz * ddz > (unloadR + 0.5) * (unloadR + 0.5)) {
-        this._unloadChunk(key);
-      }
-    }
-
-    // 3) Drain pending light propagation, then fold every chunk it touched
+    // 2) Drain pending light propagation, then fold every chunk it touched
     //    into the remesh queue. Bounded per frame so a big cave breakthrough
     //    (which can cascade daylight across several chunks) spreads its cost
     //    over a few frames instead of dropping one.
-    if (this.lighting.pending > 0) this.lighting.update(24000);
+    if (this.lighting.pending > 0) this.lighting.update(settings.lightBudget || 24000);
     const litDirty = this.lighting.takeDirtyChunks();
     if (litDirty) {
       for (const key of litDirty) {
@@ -529,35 +583,131 @@ export class World {
         if (c) { c.dirty = true; this.remeshQueue.add(key); }
       }
     }
+    const w2 = perf ? perf.now() : 0;
 
-    // 4) Process a bounded slice of the remesh queue, nearest-first.
+    // 3) Process a bounded slice of the remesh queue, nearest-first, and
+    //    upload finished worker meshes under their own time budget.
     this._processRemeshQueue(acx, acz, 3);
-
-    // Re-rank queued mesh jobs against the player's current position:
-    // streaming enqueues faster than the pool drains, so without this a
-    // player flying forward waits on chunks queued behind them.
     this.meshPool.update(acx, acz);
+    this.meshPool.drainUploads(UPLOAD_BUDGET_MS);
+    if (perf) {
+      perf.add('w.stream', w1 - w0);     // plan + chunk generation
+      perf.add('w.light', w2 - w1);
+      perf.add('w.mesh', perf.now() - w2);   // dispatch (workers) or build (main thread) + uploads
+    }
 
     // 4) Loading progress + world:ready, only while priming the first ring.
-    const events = this.game && this.game.events;
-    if (!this._primed) {
-      const value = needed > 0 ? clamp(ready / needed, 0, 1) : 1;
-      if (events && value !== this._lastProgress) {
-        this._lastProgress = value;
-        events.emit('loading:progress', {
-          value,
-          text: value >= 1 ? 'World ready' : `Generating terrain… ${Math.round(value * 100)}%`,
-        });
-      }
-      // Consider the world primed once the spawn ring is fully meshed AND the
-      // queue has drained (so the player doesn't drop into holes).
-      if (needed > 0 && ready >= needed && this.remeshQueue.size === 0) {
-        this._primed = true;
-        if (events && !this._readyEmitted) {
-          this._readyEmitted = true;
-          events.emit('loading:progress', { value: 1, text: 'World ready' });
-          events.emit('world:ready', {});
+    if (!this._primed) this._updatePriming(acx, acz, rd);
+  }
+
+  // Cached (dx,dz) offsets within `radius` chunks (a round disc), nearest first.
+  // With `dilate`, also every chunk adjacent (including diagonally) to the disc:
+  // the data a drawn chunk needs next to it in order to be meshed.
+  _offsets(radius, dilate = false) {
+    const cacheKey = radius * 2 + (dilate ? 1 : 0);
+    let o = this._offsetCache.get(cacheKey);
+    if (o) return o;
+    const lim = (radius + 0.5) * (radius + 0.5);
+    const cells = new Map();
+    for (let dz = -radius; dz <= radius; dz++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dz * dz > lim) continue;
+        const reach = dilate ? 1 : 0;
+        for (let oz = -reach; oz <= reach; oz++) {
+          for (let ox = -reach; ox <= reach; ox++) cells.set(chunkKey(dx + ox, dz + oz), [dx + ox, dz + oz]);
         }
+      }
+    }
+    const list = [...cells.values()].map(([x, z]) => [x * x + z * z, x, z]);
+    list.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+    o = new Int16Array(list.length * 2);
+    list.forEach((e, i) => { o[i * 2] = e[1]; o[i * 2 + 1] = e[2]; });
+    this._offsetCache.set(cacheKey, o);
+    return o;
+  }
+
+  // The player moved to a new chunk (or the view distance changed): decide
+  // what to load, unload what fell out of range, and queue meshing for loaded
+  // chunks that just came into view.
+  _replan(acx, acz, rd) {
+    this._ringCX = acx; this._ringCZ = acz; this._ringRD = rd;
+    // Chunk DATA is generated one chunk beyond what is drawn: a chunk is meshed
+    // only once all eight neighbours exist, so the outermost drawn chunks have
+    // real terrain next to them instead of triggering on-demand generation.
+    this._plan = this._offsets(rd, true);
+    this._planIdx = 0;
+
+    const lim = (rd + 1 + UNLOAD_MARGIN + 0.5) * (rd + 1 + UNLOAD_MARGIN + 0.5);
+    let doomed = null;
+    for (const [key, c] of this.chunks) {
+      const dx = c.cx - acx, dz = c.cz - acz;
+      if (dx * dx + dz * dz > lim) (doomed || (doomed = [])).push(key);
+    }
+    if (doomed) for (const key of doomed) this._unloadChunk(key);
+
+    const ring = this._offsets(rd);
+    for (let i = 0; i < ring.length; i += 2) {
+      const c = this.chunks.get(chunkKey(acx + ring[i], acz + ring[i + 1]));
+      if (c) this._queueIfReady(c);
+    }
+  }
+
+  // Is this chunk inside the drawn ring and fully surrounded by loaded chunks?
+  _meshReady(chunk) {
+    const dx = chunk.cx - this._ringCX, dz = chunk.cz - this._ringCZ;
+    const r = this._ringRD + 0.5;
+    if (!(dx * dx + dz * dz <= r * r)) return false;       // also false while _ringCX is NaN
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        if ((ox || oz) && !this.chunks.has(chunkKey(chunk.cx + ox, chunk.cz + oz))) return false;
+      }
+    }
+    return true;
+  }
+
+  _queueIfReady(chunk) {
+    const key = chunkKey(chunk.cx, chunk.cz);
+    if (!chunk.dirty && this.meshes.has(key)) return;
+    if (this._meshReady(chunk)) this.remeshQueue.add(key);
+  }
+
+  // A chunk just appeared: it, and any neighbour that was waiting for it, may
+  // now be ready to mesh.
+  _onChunkLoaded(chunk) {
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const c = ox || oz ? this.chunks.get(chunkKey(chunk.cx + ox, chunk.cz + oz)) : chunk;
+        if (c) this._queueIfReady(c);
+      }
+    }
+  }
+
+  _updatePriming(acx, acz, rd) {
+    const events = this.game && this.game.events;
+    const ring = this._offsets(Math.min(rd, PRIME_RADIUS));
+    let needed = 0, ready = 0;
+    for (let i = 0; i < ring.length; i += 2) {
+      needed++;
+      const key = chunkKey(acx + ring[i], acz + ring[i + 1]);
+      const c = this.chunks.get(key);
+      if (c && this.meshes.has(key) && !c.dirty) ready++;
+    }
+    const value = needed > 0 ? clamp(ready / needed, 0, 1) : 1;
+    if (events && value !== this._lastProgress) {
+      this._lastProgress = value;
+      events.emit('loading:progress', {
+        value,
+        text: value >= 1 ? 'World ready' : `Generating terrain… ${Math.round(value * 100)}%`,
+      });
+    }
+    // Primed once the spawn ring is fully meshed, so the player does not drop
+    // into holes.
+    if (needed > 0 && ready >= needed) {
+      this._primed = true;
+      if (events && !this._readyEmitted) {
+        this._readyEmitted = true;
+        events.emit('loading:progress', { value: 1, text: 'World ready' });
+        events.emit('world:ready', {});
       }
     }
   }
@@ -566,31 +716,38 @@ export class World {
     this.remeshQueue.add(chunkKey(cx, cz));
   }
 
-  // Build geometry for up to `budget` of the nearest queued chunks this frame.
+  // Hand the nearest queued chunks to the mesher: to the worker pool when there
+  // is one, otherwise build them here under a time budget.
   _processRemeshQueue(acx, acz, budget) {
-    if (this.remeshQueue.size === 0) return;
+    const q = this.remeshQueue;
+    if (q.size === 0) return;
 
-    // Sort queued keys by squared distance to the anchor (nearest first).
-    const keys = [...this.remeshQueue];
-    keys.sort((a, b) => {
-      const A = this._keyCoords(a), B = this._keyCoords(b);
-      const da = (A.cx - acx) * (A.cx - acx) + (A.cz - acz) * (A.cz - acz);
-      const db = (B.cx - acx) * (B.cx - acx) + (B.cz - acz) * (B.cz - acz);
-      return da - db;
-    });
+    // The distance-sorted view is rebuilt only when a new chunk was queued or
+    // the player changed chunk, not every frame.
+    if (this._orderStamp !== q.stamp || this._orderCX !== acx || this._orderCZ !== acz) {
+      const order = Array.from(q);
+      const dist = (k) => { const dx = chunkKeyX(k) - acx, dz = chunkKeyZ(k) - acz; return dx * dx + dz * dz; };
+      order.sort((a, b) => dist(a) - dist(b));
+      this._order = order; this._orderIdx = 0;
+      this._orderStamp = q.stamp; this._orderCX = acx; this._orderCZ = acz;
+    }
 
-    // With workers the per-frame budget is much larger: dispatching a job is
-    // just packing a buffer, and the meshing itself no longer competes with
-    // rendering. Without them we stay conservative, since each build blocks
-    // the frame.
+    // With workers the per-frame count is larger: dispatching a job is just
+    // packing a buffer. Without them every build blocks the frame, so it is
+    // limited by time as well.
     const usingWorkers = this.meshPool.enabled;
-    const effectiveBudget = usingWorkers ? budget * 8 : budget;
+    const limit = usingWorkers ? budget * 8 : budget;
+    const t0 = performance.now();
 
-    let built = 0;
-    for (let i = 0; i < keys.length && built < effectiveBudget; i++) {
-      const key = keys[i];
+    const order = this._order;
+    let i = this._orderIdx, built = 0;
+    while (i < order.length && built < limit) {
+      const key = order[i];
+      if (!q.has(key)) { i++; continue; }
       const chunk = this.chunks.get(key);
-      if (!chunk) { this.remeshQueue.delete(key); continue; }
+      // A chunk that fell out of range (or lost a neighbour) is not meshed;
+      // it is queued again by _onChunkLoaded / _replan when it is ready.
+      if (!chunk || !this._meshReady(chunk)) { q.delete(key); i++; continue; }
 
       if (usingWorkers) {
         // Don't pile more onto a saturated pool — leaving the chunk queued
@@ -600,16 +757,19 @@ export class World {
         this.meshPool.request(chunk, dx * dx + dz * dz);
       } else {
         // _uploadChunkGeometry emits 'chunk:meshed' for both paths.
+        if (built > 0 && performance.now() - t0 > 6) break;
         this._buildChunkMesh(chunk);
       }
 
-      this.remeshQueue.delete(key);
+      q.delete(key);
       // Cleared at dispatch either way. On the worker path the geometry
       // arrives a few frames later; leaving the flag set would have the
       // streaming loop re-queue the same chunk every frame in the meantime.
       chunk.dirty = false;
       built++;
+      i++;
     }
+    this._orderIdx = i;
   }
 
   // (Re)build the three buckets of geometry for one chunk and swap the meshes,
@@ -696,7 +856,9 @@ export class World {
     geom.setAttribute('uv', new T.BufferAttribute(f32(bucket.uv), 2));
     geom.setAttribute('aTexIdx', new T.BufferAttribute(f32(bucket.texIdx), 1));
     geom.setIndex(new T.BufferAttribute(u32(bucket.indices), 1));
-    geom.computeBoundingSphere();
+    // Every chunk spans the same local box, so share one bounding sphere instead
+    // of scanning the vertices to compute a tight one on the main thread.
+    geom.boundingSphere = CHUNK_SPHERE.clone();
 
     if (oldMesh) {
       // Reuse the existing mesh object: dispose old geometry, attach new.
@@ -767,6 +929,7 @@ export class World {
       const x = e[0] | 0, y = e[1] | 0, z = e[2] | 0, id = e[3] | 0;
       if (y < 0 || y >= CHUNK_SY) continue;
       this.edits.set(voxelKey(x, y, z), id);
+      this._indexEdit(Math.floor(x / CHUNK_SX), Math.floor(z / CHUNK_SZ), x - Math.floor(x / CHUNK_SX) * CHUNK_SX, y, z - Math.floor(z / CHUNK_SZ) * CHUNK_SZ, id);
 
       // If the target chunk is already loaded, write through + queue a remesh.
       const cx = Math.floor(x / CHUNK_SX);
@@ -781,13 +944,6 @@ export class World {
   }
 
   /* ---- helpers ---------------------------------------------------------- */
-
-  // Parse a chunkKey "cx,cz" back into integer coords (avoids parseKey alloc
-  // patterns and keeps it dependency-light).
-  _keyCoords(key) {
-    const c = key.indexOf(',');
-    return { cx: +key.slice(0, c), cz: +key.slice(c + 1) };
-  }
 }
 
 export default World;

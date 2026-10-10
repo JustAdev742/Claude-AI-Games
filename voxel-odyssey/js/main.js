@@ -15,6 +15,8 @@
 
 import * as THREE from 'three';
 
+import { Perf } from './core/perf.js';
+import { Quality, settingsForPreset, gatherHardware, PRESET_KEYS } from './core/quality.js';
 import { EventBus } from './core/events.js';
 import { GameState } from './core/state.js';
 import { Input } from './core/input.js';
@@ -67,7 +69,57 @@ boot().catch((err) => {
   if (box && msg) { box.hidden = false; msg.textContent = (err && err.stack) || String(err); }
 });
 
+// Settings can be forced from the address bar, which makes "open this link with
+// quality=low" a one-step fix to pass to someone on a slow machine:
+//   ?quality=low|medium|high|auto   ?scale=0.6   ?distance=4   ?fps=30
+function applyUrlOverrides(state) {
+  if (typeof location === 'undefined') return;
+  const q = new URLSearchParams(location.search);
+  const num = (k) => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : null);
+  const preset = q.get('quality');
+  if (preset && ['auto', 'low', 'medium', 'high'].includes(preset)) {
+    state.settings.quality = preset;
+    state.settings._autoApplied = '';        // re-run detection / re-apply the bundle
+    if (preset !== 'auto') {
+      const p = settingsForPreset(preset, gatherHardware());
+      for (const k of PRESET_KEYS) state.settings[k] = p[k];
+      state.settings._autoApplied = preset;
+    }
+  }
+  if (num('scale') !== null) state.settings.renderScale = Math.max(0.25, Math.min(1, num('scale')));
+  if (num('distance') !== null) state.settings.renderDistance = Math.max(2, Math.min(12, Math.round(num('distance'))));
+  if (num('fps') !== null) state.settings.maxFps = Math.max(0, Math.round(num('fps')));
+}
+
+// The terrain shader needs WebGL 2 (texture arrays). Most machines from the
+// last decade have it; if this one does not, say so plainly instead of leaving
+// a black screen.
+function webgl2Supported() {
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2');
+    if (!gl) return false;
+    const lose = gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();
+    return true;
+  } catch (_) { return false; }
+}
+
 async function boot() {
+  if (!webgl2Supported()) {
+    const box = document.getElementById('fatal-error');
+    const msg = document.getElementById('fatal-message');
+    const ld = document.getElementById('loading-screen');
+    if (ld) ld.classList.add('hidden');
+    if (box && msg) {
+      box.hidden = false;
+      msg.textContent = 'This browser or graphics driver does not offer WebGL 2, which Voxel Odyssey needs.\n\n' +
+        '• Use a current Chrome, Edge or Firefox (portable versions work without admin rights).\n' +
+        '• Make sure hardware acceleration is switched on in the browser settings.\n' +
+        '• Update the graphics driver if you can; very old integrated graphics (before about 2012) cannot do WebGL 2.';
+    }
+    return;
+  }
   const canvas = document.getElementById('game-canvas');
   const loadingScreen = document.getElementById('loading-screen');
   const loadingFill = document.getElementById('loading-fill');
@@ -78,7 +130,13 @@ async function boot() {
   // ---- core ----
   const events = new EventBus();
   const state = new GameState(events);
+  applyUrlOverrides(state);
+  const perf = new Perf();
+  // First-run hardware detection happens BEFORE the renderer exists, because
+  // MSAA is a creation-time option.
+  const prepared = Quality.prepare(state);
   const engine = new Engine(canvas, state.settings);
+  engine.perf = perf;
   const input = new Input(canvas, events, state);
 
   // ---- the shared context ----
@@ -91,12 +149,13 @@ async function boot() {
     events,
     state,
     input,
+    perf,
     blocks: Blocks,
     items: Items,
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
     inventory: null, crafting: null, furnaces: null, chests: null, growth: null, particles: null, audio: null,
-    sky: null, weather: null, hud: null, menus: null, touch: null, resources: null,
+    sky: null, weather: null, hud: null, menus: null, touch: null, quality: null, resources: null,
     net: null, remotePlayers: null,
     // runtime
     dt: 0, elapsed: 0, seed: 0, worldActive: false,
@@ -121,6 +180,7 @@ async function boot() {
   game.hud = new HUD(game);
   game.menus = new Menus(game);
   game.touch = new TouchControls(game);
+  game.quality = new Quality(game);
   game.resources = new Resources(game);
   // Networking is inert until connect() is called — single-player runs the
   // identical code path with no socket attached.
@@ -141,6 +201,8 @@ async function boot() {
       catch (err) { console.error(`init() failed for ${name}:`, err); }
     }
   }
+
+  game.quality.init(prepared);
 
   // Apply any saved key rebinds over the defaults.
   input.applyBindings(state.settings.keyBindings);
@@ -390,21 +452,29 @@ async function boot() {
       const anchor = (state.mode === 'play') ? game.player.position : menuCam.center;
 
       if (game.worldActive) {
+        const P = perf, t0 = P.now();
         // Advance day/night while playing, or gently during the menu backdrop.
         game.sky.update(playing ? dt * state.get('daylightSpeed') : (state.mode === 'menu' ? dt * 0.3 : 0));
         // Weather runs on real time, not the day-cycle multiplier: a fast
         // daylight setting should not make rain fall in fast-forward.
         if (game.weather) game.weather.update(playing ? dt : 0);
+        const t1 = P.now(); P.add('sky', t1 - t0);
         if (playing) {
           game.player.update(dt);
+          const t2 = P.now(); P.add('player', t2 - t1);
           game.entities.update(dt);
+          const t3 = P.now(); P.add('entities', t3 - t2);
           // Smelting carries on while the inventory screen is open and while
           // the player is away from the furnace.
           game.furnaces.update(dt);
           game.growth.update(dt);
+          P.add('machines', P.now() - t3);
         }
+        const t4 = P.now();
         game.world.update(dt, anchor);
+        const t5 = P.now(); P.add('world', t5 - t4);
         game.particles.update(dt);
+        P.add('particles', P.now() - t5);
       }
 
       // Menu backdrop camera orbit.
@@ -460,12 +530,16 @@ async function boot() {
       if (game.net) game.net.update(dt);
       if (game.remotePlayers) game.remotePlayers.update(dt);
 
+      const tn = perf.now();
       game.audio.update(dt);
       // Animated block textures (water, fire) — advances layer indices only.
       if (game.resources) game.resources.update(dt);
+      const tu = perf.now(); perf.add('audio+fx', tu - tn);
       game.hud.update(dt);
       game.menus.update(dt);
       game.touch.update();
+      perf.add('ui', perf.now() - tu);
+      game.quality.update(engine.rawMs || dt * 1000, perf.frameMs);
     } catch (err) {
       if (!boot._errored) { console.error('Loop error:', err); boot._errored = true; }
     } finally {

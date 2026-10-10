@@ -112,8 +112,8 @@ export class EntityManager {
   _renderDistanceChunks() {
     const st = this.game && this.game.state;
     let rd = 6;
-    if (st && st.settings && typeof st.settings.renderDistance === 'number') {
-      rd = st.settings.renderDistance;
+    if (st && typeof st.renderDistance === 'number') {
+      rd = st.renderDistance;           // the effective distance (see GameState.renderDistance)
     }
     return rd > 0 ? rd : 6;
   }
@@ -458,8 +458,11 @@ export class EntityManager {
       if (m.hostile) hostile++; else passive++;
     }
 
-    const passiveCap = PASSIVE_CAP;
-    const hostileCap = night ? HOSTILE_CAP_NIGHT : HOSTILE_CAP_DAY;
+    // The quality preset scales how many mobs may exist (each costs AI + draws).
+    const stg = this.game.state && this.game.state.settings;
+    const mobScale = stg && typeof stg.mobScale === 'number' ? stg.mobScale : 1;
+    const passiveCap = Math.max(2, Math.round(PASSIVE_CAP * mobScale));
+    const hostileCap = Math.max(night ? 3 : 1, Math.round((night ? HOSTILE_CAP_NIGHT : HOSTILE_CAP_DAY) * mobScale));
 
     // Pick what to try spawning this tick. Daytime favours passive animals;
     // night favours monsters. We try one category per tick to keep it cheap.

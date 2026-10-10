@@ -421,6 +421,30 @@ export class Menus {
     panel.appendChild(this._toggle('fancyGraphics', 'Fancy Graphics (AO + clouds)'));
     panel.appendChild(this._toggle('viewBobbing', 'View Bobbing'));
 
+    // ---- Performance ---------------------------------------------------
+    panel.appendChild(this._make('h2', { text: 'Performance' }));
+    const g0 = this.game, q = g0 && g0.quality;
+    panel.appendChild(this._choice('quality', 'Quality preset', [
+      ['auto', 'Auto (detect my hardware)'], ['low', 'Low — old laptops'], ['medium', 'Medium'], ['high', 'High'], ['custom', 'Custom'],
+    ], (v) => {
+      if (v === 'custom') { g0.state.set('quality', 'custom'); return; }
+      if (q) q.setPreset(v);
+      this.showSettings(back);              // the other controls change with the preset
+    }));
+    panel.appendChild(this._slider('renderScale', 'Resolution (render scale)', 0.5, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
+    panel.appendChild(this._choice('shaderTier', 'Shader detail', [[0, 'Low (fastest)'], [1, 'Medium'], [2, 'High']],
+      (v) => g0.state.set('shaderTier', Number(v))));
+    panel.appendChild(this._choice('maxFps', 'Frame rate limit', [[0, 'No limit'], [30, '30 fps'], [45, '45 fps'], [60, '60 fps']],
+      (v) => g0.state.set('maxFps', Number(v))));
+    panel.appendChild(this._toggle('dynamicResolution', 'Adaptive resolution (lowers detail if the game stutters)'));
+    if (q) {
+      const hw = q.hardware;
+      const eng = g0.engine;
+      const note = hw && hw.gpu ? `Detected: ${hw.gpu.replace(/^ANGLE \(|\)$/g, '')} · ${hw.cores} cores` : 'Hardware not detected';
+      const live = eng ? ` · drawing at ${Math.round(eng.renderScale * 100)}% resolution, ${g0.state.renderDistance} chunks` : '';
+      panel.appendChild(this._make('p', { class: 'subtitle', style: 'font-size:12px;margin:6px 0 0;', text: note + live }));
+    }
+
     // ---- Controls ------------------------------------------------------
     panel.appendChild(this._make('h2', { text: 'Controls' }));
     panel.appendChild(this._slider('mouseSensitivity', 'Mouse Sensitivity', 0.1, 3, 0.05, (v) => `${v.toFixed(2)}×`));
@@ -513,6 +537,32 @@ export class Menus {
     input.addEventListener('input', apply);
     input.addEventListener('change', apply);
     wrap.appendChild(input);
+    return wrap;
+  }
+
+  // A labelled drop-down bound to a settings key. `options` is [[value, label]];
+  // `onChange(value)` runs instead of the plain write when given (presets need
+  // to rewrite several settings at once).
+  _choice(key, label, options, onChange) {
+    const wrap = this._make('div', { class: 'setting' });
+    const labelRow = this._make('label');
+    labelRow.appendChild(this._make('span', { text: label }));
+    wrap.appendChild(labelRow);
+    const sel = this._make('select', { class: 'choice' });
+    const cur = this._settingValue(key);
+    for (const [value, text] of options) {
+      const o = this._make('option', { value: String(value), text });
+      if (String(value) === String(cur)) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', () => {
+      const raw = sel.value;
+      const opt = options.find(([v]) => String(v) === raw);
+      const v = opt ? opt[0] : raw;
+      if (onChange) onChange(v);
+      else if (this.game && this.game.state) this.game.state.set(key, v);
+    });
+    wrap.appendChild(sel);
     return wrap;
   }
 

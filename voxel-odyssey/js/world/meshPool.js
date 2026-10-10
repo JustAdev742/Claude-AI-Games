@@ -31,6 +31,20 @@ function defaultWorkerCount() {
   return Math.max(1, Math.min(4, cores - 1));
 }
 
+/* How to start a mesher worker. The single-file build has no worker file to
+   point at, so it embeds the (separately bundled) worker source in the page as
+   inert text and we run it from a Blob URL; from source, the module file is
+   used directly. Blob workers also work when the page is opened from disk
+   (file://), where loading a worker by file URL is blocked. */
+function workerFactory() {
+  const el = typeof document !== 'undefined' ? document.getElementById('mesher-worker-src') : null;
+  if (el && el.textContent && typeof Blob !== 'undefined' && URL.createObjectURL) {
+    const url = URL.createObjectURL(new Blob([el.textContent], { type: 'text/javascript' }));
+    return () => new Worker(url);
+  }
+  return () => new Worker(new URL('./mesher.worker.js', import.meta.url), { type: 'module' });
+}
+
 export class MeshPool {
   constructor(world) {
     this.world = world;
@@ -52,6 +66,11 @@ export class MeshPool {
     // packing the next job doesn't overwrite one still being transferred.
     this._scratch = [];
 
+    // Finished meshes waiting to be turned into GPU geometry. Results arrive
+    // whenever a worker finishes, which can be several in one frame; uploading
+    // them all at once is a hitch, so World drains this under a time budget.
+    this._uploads = [];
+
     this.stats = { queued: 0, meshed: 0, dropped: 0, fallback: 0 };
   }
 
@@ -59,8 +78,9 @@ export class MeshPool {
     if (typeof Worker === 'undefined' || typeof URL === 'undefined') return this;
     try {
       const count = defaultWorkerCount();
+      const make = workerFactory();
       for (let i = 0; i < count; i++) {
-        const w = new Worker(new URL('./mesher.worker.js', import.meta.url), { type: 'module' });
+        const w = make();
         w.onmessage = (e) => this._onWorkerMessage(w, e.data);
         w.onerror = (err) => {
           console.warn('mesh worker failed, falling back to synchronous meshing', err.message);
@@ -92,6 +112,7 @@ export class MeshPool {
     this.generation++;
     this.queue.clear();
     this.inFlight.clear();
+    this._uploads.length = 0;
   }
 
   shutdown() {
@@ -99,9 +120,22 @@ export class MeshPool {
     this.workers = [];
     this.idle = [];
     this.enabled = false;
+    // Jobs the dead workers were holding (and any still waiting) would leave
+    // their chunks permanently unmeshed — they were marked clean at dispatch.
+    // Hand them back to the world so it rebuilds them on the main thread.
+    const lost = [];
+    for (const j of this.inFlight.values()) lost.push(j.key);
+    for (const k of this.queue.keys()) lost.push(k);
+    this.inFlight.clear();
+    this.queue.clear();
+    for (const key of lost) {
+      const c = this.world.chunks.get(key);
+      if (c) { c.dirty = true; this.world.remeshQueue.add(key); }
+    }
+    this.generation++;
   }
 
-  get pending() { return this.queue.size + this.inFlight.size; }
+  get pending() { return this.queue.size + this.inFlight.size + this._uploads.length; }
 
   /* Queue a chunk. Returns false when workers are unavailable, so the caller
      can mesh it synchronously instead. */
@@ -170,38 +204,45 @@ export class MeshPool {
 
   /* Build the chunk plus a one-voxel skin of its neighbours — everything the
      mesher can reach when culling border faces and blending light across the
-     seam. */
+     seam. All eight neighbours are loaded by the time a chunk is meshed (see
+     World._meshReady), so the skin is copied column-by-column straight out of
+     their arrays; a missing one reads as empty air instead of being generated. */
   _packNeighbourhood(chunk) {
     const blocks = new Uint8Array(PADDED_LEN);
     const light = new Uint8Array(PADDED_LEN);
     const world = this.world;
-    const ox = chunk.cx * CHUNK_SX;
-    const oz = chunk.cz * CHUNK_SZ;
 
-    // Interior: straight column copies, since localIndex keeps a column
-    // contiguous in both layouts.
-    for (let lx = 0; lx < CHUNK_SX; lx++) {
-      for (let lz = 0; lz < CHUNK_SZ; lz++) {
-        const src = (lx * CHUNK_SZ + lz) * CHUNK_SY;
-        const dst = padIndex(lx + PAD, 0, lz + PAD);
-        blocks.set(chunk.blocks.subarray(src, src + CHUNK_SY), dst);
-        light.set(chunk.light.subarray(src, src + CHUNK_SY), dst);
+    // Copy column (sx, sz) of `src` (a chunk) into padded column (px, pz).
+    // localIndex keeps a column contiguous in both layouts, so it is one set().
+    const copyColumn = (src, sx, sz, px, pz) => {
+      if (!src) return;
+      const from = (sx * CHUNK_SZ + sz) * CHUNK_SY;
+      const to = padIndex(px, 0, pz);
+      blocks.set(src.blocks.subarray(from, from + CHUNK_SY), to);
+      light.set(src.light.subarray(from, from + CHUNK_SY), to);
+    };
+
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const src = ox || oz ? world.getChunk(chunk.cx + ox, chunk.cz + oz) : chunk;
+        if (!src) continue;
+        // Which source columns land inside the padded box for this neighbour:
+        // the whole 16x16 for the chunk itself, one edge row/column for sides,
+        // one corner column for diagonals.
+        const sx0 = ox === 0 ? 0 : ox < 0 ? CHUNK_SX - 1 : 0;
+        const sx1 = ox === 0 ? CHUNK_SX - 1 : sx0;
+        const sz0 = oz === 0 ? 0 : oz < 0 ? CHUNK_SZ - 1 : 0;
+        const sz1 = oz === 0 ? CHUNK_SZ - 1 : sz0;
+        for (let sx = sx0; sx <= sx1; sx++) {
+          for (let sz = sz0; sz <= sz1; sz++) {
+            // Padded coordinate of this column: neighbours sit one cell outside.
+            const px = ox === 0 ? sx + PAD : ox < 0 ? 0 : PSX - 1;
+            const pz = oz === 0 ? sz + PAD : oz < 0 ? 0 : PSZ - 1;
+            copyColumn(src, sx, sz, px, pz);
+          }
+        }
       }
     }
-
-    // The skin. getBlock generates missing neighbours on demand, which is what
-    // guarantees a border face is culled against real terrain rather than air.
-    const edge = (px, pz) => {
-      const wx = ox + px - PAD;
-      const wz = oz + pz - PAD;
-      for (let y = 0; y < CHUNK_SY; y++) {
-        blocks[padIndex(px, y, pz)] = world.getBlock(wx, y, wz);
-        light[padIndex(px, y, pz)] = world.getLightByte(wx, y, wz);
-      }
-    };
-    for (let px = 0; px < PSX; px++) { edge(px, 0); edge(px, PSZ - 1); }
-    for (let pz = 1; pz < PSZ - 1; pz++) { edge(0, pz); edge(PSX - 1, pz); }
-
     return { blocks, light };
   }
 
@@ -227,8 +268,29 @@ export class MeshPool {
     if (!chunk) { this.stats.dropped++; this._pump(); return; }
 
     this.stats.meshed++;
-    this.world._uploadChunkGeometry(chunk, msg);
+    this._uploads.push({ key: job.key, generation: job.generation, msg });
     this._pump();
+  }
+
+  /* Turn finished meshes into geometry, nearest-first-in, until the time
+     budget is spent. Always uploads at least one so the queue cannot stall. */
+  drainUploads(budgetMs) {
+    const list = this._uploads;
+    if (!list.length) return;
+    const perf = this.world.game && this.world.game.perf;
+    const t0 = performance.now();
+    let n = 0;
+    while (n < list.length) {
+      const u = list[n++];
+      if (u.generation === this.generation) {
+        const chunk = this.world.chunks.get(u.key);
+        if (chunk) this.world._uploadChunkGeometry(chunk, u.msg);
+        else this.stats.dropped++;
+      }
+      if (performance.now() - t0 > budgetMs) break;
+    }
+    list.splice(0, n);
+    if (perf) perf.add('w.upload', performance.now() - t0);
   }
 }
 

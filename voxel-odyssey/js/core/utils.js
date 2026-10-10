@@ -228,7 +228,12 @@ export function throttle(fn, intervalMs) {
 
 // Stable string key for a voxel coordinate (used in edit maps / sets).
 export function voxelKey(x, y, z) { return `${x},${y},${z}`; }
-export function chunkKey(cx, cz) { return `${cx},${cz}`; }
+/* Chunk keys are NUMBERS (two signed 16-bit coordinates packed into an int32),
+   not strings: they are built and looked up many times per frame, and a
+   template string allocates every time. Valid for |cx|, |cz| < 32768 chunks. */
+export function chunkKey(cx, cz) { return ((cx & 0xffff) << 16) | (cz & 0xffff); }
+export function chunkKeyX(key) { return key >> 16; }
+export function chunkKeyZ(key) { return (key << 16) >> 16; }
 export function parseKey(k) { return k.split(',').map(Number); }
 
 export function arrayRemove(arr, item) {

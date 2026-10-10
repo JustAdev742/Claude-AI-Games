@@ -19,10 +19,20 @@ export class Engine {
       powerPreference: 'high-performance',
       stencil: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Resolution the 3D view is drawn at. `renderScale` is the quality
+    // setting's multiplier (and what the adaptive governor moves); the canvas
+    // is stretched to the window by CSS, so lowering it trades sharpness for
+    // speed without touching the HUD, which is DOM.
+    this.renderScale = 1;
+    this.maxFps = 0;
+    this.renderer.setPixelRatio(this._pixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.sortObjects = true;
+    // The world and the held item are separate render() calls; keep their
+    // statistics together (reset once per frame in the loop) so the profiler
+    // reports the whole frame, not just whichever pass ran last.
+    this.renderer.info.autoReset = false;
     this.renderer.shadowMap.enabled = false; // voxel AO baked into vertex colors
 
     this.scene = new THREE.Scene();
@@ -55,12 +65,27 @@ export class Engine {
     window.addEventListener('resize', this._onResize);
   }
 
+  // Device pixels per CSS pixel to render at. High-DPI screens are capped at
+  // 1.5x (at 2x a laptop panel has four times the pixels of its CSS size, which
+  // is more than an integrated GPU can fill), then the quality scale applies.
+  _pixelRatio() {
+    return Math.max(0.25, Math.min(window.devicePixelRatio || 1, 1.5) * this.renderScale);
+  }
+
+  setRenderScale(scale) {
+    scale = Math.max(0.25, Math.min(1, scale || 1));
+    if (Math.abs(scale - this.renderScale) < 1e-3) return;
+    this.renderScale = scale;
+    // setPixelRatio re-sizes the drawing buffer; the camera is unaffected.
+    this.renderer.setPixelRatio(this._pixelRatio());
+  }
+
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(this._pixelRatio());
     this.renderer.setSize(w, h);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   }
 
   setFov(fov) {
@@ -82,7 +107,12 @@ export class Engine {
       if (!this._running) return;
       this._raf = requestAnimationFrame(loop);
       if (!this.clock.last) this.clock.last = tMs;
+      // Optional frame cap: skip this display refresh if it is too soon. The
+      // 1 ms slack stops a 60 Hz screen being halved by timer jitter.
+      if (this.maxFps > 0 && tMs - this.clock.last < 1000 / this.maxFps - 1) return;
       let dt = (tMs - this.clock.last) / 1000;
+      const rawMs = dt * 1000;           // un-clamped wall-clock frame time, for the profiler
+      this.rawMs = rawMs;
       this.clock.last = tMs;
       // Clamp dt so tab-switches / hitches don't explode physics.
       if (dt > 0.1) dt = 0.1;
@@ -99,7 +129,11 @@ export class Engine {
         this._fpsFrames = 0;
       }
 
+      const perf = this.perf;
+      this.renderer.info.reset();
+      const f0 = perf ? perf.now() : 0;
       if (this._updateFn) this._updateFn(dt, this.clock.elapsed, tMs);
+      const f1 = perf ? perf.now() : 0;
 
       this.renderer.render(this.scene, this.camera);
       // Held-item viewmodel drawn on top, depth cleared.
@@ -108,6 +142,12 @@ export class Engine {
         this.renderer.clearDepth();
         this.renderer.render(this.viewmodelScene, this.viewmodelCamera);
         this.renderer.autoClear = true;
+      }
+      if (perf) {
+        const f2 = perf.now();
+        perf.add('update', f1 - f0);
+        perf.add('render', f2 - f1);          // CPU time to SUBMIT the frame, not GPU time
+        perf.endFrame(f2 - f0, rawMs);
       }
     };
     this._raf = requestAnimationFrame(loop);

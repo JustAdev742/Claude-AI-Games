@@ -148,7 +148,21 @@ const FRAG = /* glsl */`
 
   #include <fog_pars_fragment>
 
-  vec3 toLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+  // QUALITY selects how much work the fragment shader does (see the tier table
+  // in material.js): 0 = cheapest (squares/square-roots instead of pow, flat
+  // water), 1 = ripples + glint, 2 = everything.
+  #ifndef QUALITY
+    #define QUALITY 2
+  #endif
+
+  #if QUALITY >= 1
+    vec3 toLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+    vec3 toDisplay(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+  #else
+    // Gamma 2.0 is within a few percent of 2.2 and costs a multiply / a sqrt.
+    vec3 toLinear(vec3 c) { return c * c; }
+    vec3 toDisplay(vec3 c) { return sqrt(max(c, vec3(0.0))); }
+  #endif
 
   // Extended Reinhard: keeps shadows and mid-tones where they are (no filmic
   // toe to crush the dark end) and rolls highlights off smoothly instead of
@@ -170,8 +184,12 @@ const FRAG = /* glsl */`
   vec2 waterSlope(vec2 p, float t) {
     vec2 g = vec2(0.0);
     g += vec2(cos(p.x * 1.30 + p.y * 0.70 + t * 1.10), cos(p.y * 1.10 + p.x * 0.50 - t * 0.90)) * 0.085;
-    g += vec2(cos(p.x * 3.10 - t * 1.90), cos(p.y * 2.70 + p.x * 1.30 + t * 1.60)) * 0.045;
-    g += vec2(cos(p.x * 7.30 + p.y * 3.10 + t * 2.70), cos(p.y * 6.10 - p.x * 2.90 - t * 2.30)) * 0.020;
+    #if QUALITY >= 2
+      g += vec2(cos(p.x * 3.10 - t * 1.90), cos(p.y * 2.70 + p.x * 1.30 + t * 1.60)) * 0.045;
+      g += vec2(cos(p.x * 7.30 + p.y * 3.10 + t * 2.70), cos(p.y * 6.10 - p.x * 2.90 - t * 2.30)) * 0.020;
+    #else
+      g += vec2(cos(p.x * 3.10 - t * 1.90), cos(p.y * 2.70 + p.x * 1.30 + t * 1.60)) * 0.045;
+    #endif
     return g;
   }
 
@@ -204,10 +222,12 @@ const FRAG = /* glsl */`
     // from its face normal.
     vec3 Nl = N;
     vec3 V = normalize(cameraPosition - vWorldPos);
-    if (uIsWater > 0.5 && N.y > 0.5) {
-      vec2 g = waterSlope(vWorldPos.xz, uTime);
-      Nl = normalize(vec3(-g.x, 1.0, -g.y));
-    }
+    #if QUALITY >= 1
+      if (uIsWater > 0.5 && N.y > 0.5) {
+        vec2 g = waterSlope(vWorldPos.xz, uTime);
+        Nl = normalize(vec3(-g.x, 1.0, -g.y));
+      }
+    #endif
 
     // --- sky light: hemisphere ambient + direct sun ------------------------
     float up = Nl.y * 0.5 + 0.5;
@@ -233,8 +253,12 @@ const FRAG = /* glsl */`
       // The surface seen from UNDER the water. Looking up inside the critical
       // angle you see the sky through a bright circular window; outside it the
       // surface is a mirror of the dark water below.
-      vec2 g = waterSlope(vWorldPos.xz, uTime);
-      vec3 Nu = normalize(vec3(g.x, -1.0, g.y));
+      #if QUALITY >= 1
+        vec2 g = waterSlope(vWorldPos.xz, uTime);
+        vec3 Nu = normalize(vec3(g.x, -1.0, g.y));
+      #else
+        vec3 Nu = vec3(0.0, -1.0, 0.0);
+      #endif
       float cosT = clamp(dot(Nu, V), 0.0, 1.0);
       float window = smoothstep(0.58, 0.74, cosT);
       vec3 sky = mix(uHorizon, uZenith, 0.55) * (0.5 + 0.5 * sunVis);
@@ -249,9 +273,11 @@ const FRAG = /* glsl */`
       vec3 R = reflect(-V, Nl);
       vec3 sky = mix(uHorizon, uZenith, pow(clamp(R.y, 0.0, 1.0), 0.55));
       lit = mix(lit, sky * (0.35 + 0.65 * sunVis), fres * (N.y > 0.5 ? 1.0 : 0.35));
-      // Sun / moon glint on the ripples.
-      float spec = pow(max(dot(R, L), 0.0), 240.0);
-      lit += uSunLight * spec * 3.0 * sunVis * step(0.0, L.y);
+      #if QUALITY >= 1
+        // Sun / moon glint on the ripples.
+        float spec = pow(max(dot(R, L), 0.0), 240.0);
+        lit += uSunLight * spec * 3.0 * sunVis * step(0.0, L.y);
+      #endif
       alpha = clamp(mix(alpha, 0.97, fres), 0.0, 1.0);
     }
 
@@ -260,9 +286,11 @@ const FRAG = /* glsl */`
     // A touch of saturation back: tone mapping pulls everything toward grey.
     float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
     mapped = mix(vec3(luma), mapped, 1.12);
-    vec3 rgb = pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2));
-    // Sub-LSB noise breaks up banding in the long dark gradients.
-    rgb += (hash12(gl_FragCoord.xy) - 0.5) / 255.0;
+    vec3 rgb = toDisplay(mapped);
+    #if QUALITY >= 2
+      // Sub-LSB noise breaks up banding in the long dark gradients.
+      rgb += (hash12(gl_FragCoord.xy) - 0.5) / 255.0;
+    #endif
 
     gl_FragColor = vec4(rgb, alpha);
 
@@ -330,6 +358,7 @@ export function createVoxelMaterials(shared) {
 
     const m = new THREE.ShaderMaterial(Object.assign({
       uniforms,
+      defines: { QUALITY: 2 },
       vertexShader: VERT,
       fragmentShader: FRAG,
       fog: true,
@@ -385,6 +414,22 @@ export function createVoxelMaterials(shared) {
   });
 
   return { opaque, water, foliage, viewmodel };
+}
+
+/**
+ * Choose how much work the fragment shader does, on every terrain material.
+ * 0 = cheap (no water ripples/glint, gamma 2.0, no dither), 1 = medium
+ * (single-octave ripples + glint), 2 = full. Changing it recompiles the
+ * shaders once; it is meant for a settings change, not for every frame.
+ */
+export function setShaderTier(materials, tier) {
+  const t = Math.max(0, Math.min(2, tier | 0));
+  for (const m of Object.values(materials)) {
+    if (!m || !m.defines || m.defines.QUALITY === t) continue;
+    m.defines.QUALITY = t;
+    m.needsUpdate = true;
+  }
+  return t;
 }
 
 /**
