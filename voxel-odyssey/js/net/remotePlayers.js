@@ -120,7 +120,7 @@ class RemotePlayerRig {
   /**
    * @param {object} r   interpolated render state from NetClient
    * @param {number} dt  seconds
-   * @param {number} sky 0..1 skylight at the player, already scaled by daylight
+   * @param {number} sky 0..1 skylight at the player (occlusion only; time of day comes from the scene lights)
    * @param {number} blk 0..1 blocklight at the player
    */
   update(r, dt, sky, blk) {
@@ -279,8 +279,6 @@ export class RemotePlayers {
       return;
     }
 
-    const daylight = (world && world.uniforms) ? world.uniforms.uDaylight.value : 1;
-
     for (const p of this.net.players.values()) {
       if (!p.render.valid) continue;
       let rig = this.rigs.get(p.id);
@@ -297,7 +295,8 @@ export class RemotePlayers {
         const packed = world.getLightByte(
           Math.floor(p.render.x), Math.floor(p.render.y + 1.5), Math.floor(p.render.z),
         );
-        sky = ((packed >> 4) & 0x0f) / 15 * daylight;
+        // Occlusion only: time of day arrives through the scene lights.
+        sky = ((packed >> 4) & 0x0f) / 15;
         blk = (packed & 0x0f) / 15;
       }
       rig.update(p.render, dt, sky, blk);

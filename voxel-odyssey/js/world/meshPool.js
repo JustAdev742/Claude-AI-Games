@@ -162,6 +162,7 @@ export class MeshPool {
       cz: chunk.cz,
       blocks,
       light,
+      climate: chunk.climate,     // copied, not transferred: the chunk keeps it
       ao: true,
       smoothLighting: settings.smoothLighting !== false,
     }, [blocks.buffer, light.buffer]);

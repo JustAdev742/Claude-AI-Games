@@ -12,6 +12,7 @@ const SAVE_KEY = 'voxel-odyssey:save:v1';
 export const DEFAULT_SETTINGS = {
   renderDistance: 6,      // chunks (clamped 2..12)
   fov: 75,                // degrees
+  brightness: 1.0,        // exposure multiplier for the terrain and entity lighting
   mouseSensitivity: 1.0,  // multiplier
   invertY: false,
   masterVolume: 0.8,

@@ -18,6 +18,7 @@
 import { CHUNK_SX, CHUNK_SY, CHUNK_SZ, CHUNK_VOL, localIndex } from './constants.js';
 import Blocks, { ID, FACES, FACE_UVS } from './blocks.js';
 import { tintVariation } from '../core/utils.js';
+import { buildColumnTints } from './biomeColor.js';
 
 /* =========================================================================
    Chunk — pure voxel data container.
@@ -39,6 +40,11 @@ export class Chunk {
     this.generated = false;  // terrain has been written by WorldGen
     this.lit = false;        // LightEngine has done its initial flood fill
     this.empty = true;       // fast skip: true while only air has been written
+
+    // Per-column [temperature, moisture] (0..1), interleaved and indexed
+    // (lx * CHUNK_SZ + lz) * 2. Recorded by WorldGen; the mesher turns it into
+    // grass / foliage / water tints. null = neutral colours.
+    this.climate = null;
   }
 
   /* -------- bounds helpers -------- */
@@ -296,7 +302,12 @@ export function meshChunk(chunk, getBlock, opts) {
     return 0;
   };
 
-  const ctx = { sample, sampleLight, ao, smooth, atlas };
+  // Biome tints: one (grass, foliage, water) multiplier per column, from the
+  // climate the generator recorded. Absent (tests, old chunks) means neutral.
+  const climate = opts.climate || chunk.climate || null;
+  const tints = climate ? buildColumnTints(climate, CHUNK_SX * CHUNK_SZ) : null;
+
+  const ctx = { sample, sampleLight, ao, smooth, atlas, tints, ox, oz };
 
   for (let lx = 0; lx < CHUNK_SX; lx++) {
     const wx = ox + lx;
@@ -330,6 +341,28 @@ function newBucket() {
   };
 }
 
+/* Biome tint for a textured cube face, or null for blocks that do not take
+   one. Grass tints its top fully and its sides at 60% (the side texture is part
+   dirt, which should not swing as far as the blades do). Pine needles stay a
+   fixed conifer green. */
+const _bt = [1, 1, 1];
+function biomeTintFor(ctx, id, f, wx, wz) {
+  const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+  if (id === ID.GRASS) {
+    const k = f === 2 ? 1 : f === 3 ? 0 : 0.6;
+    if (k === 0) return null;
+    const t = ctx.tints.grass;
+    _bt[0] = 1 + (t[o] - 1) * k; _bt[1] = 1 + (t[o + 1] - 1) * k; _bt[2] = 1 + (t[o + 2] - 1) * k;
+    return _bt;
+  }
+  if (id === ID.LEAVES || id === ID.BIRCH_LEAVES) {
+    const t = ctx.tints.foliage;
+    _bt[0] = t[o]; _bt[1] = t[o + 1]; _bt[2] = t[o + 2];
+    return _bt;
+  }
+  return null;
+}
+
 /* -------- emit one opaque/leaf cube's visible faces -------- */
 function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   for (let f = 0; f < 6; f++) {
@@ -354,9 +387,13 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     // only thing describing what they look like.
     const source = layer >= 0 ? WHITE : Blocks.faceColor(id, f);
     const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
-    const r = tinted[0] * shade;
-    const g = tinted[1] * shade;
-    const b = tinted[2] * shade;
+    let r = tinted[0] * shade;
+    let g = tinted[1] * shade;
+    let b = tinted[2] * shade;
+    if (ctx.tints && layer >= 0) {
+      const bt = biomeTintFor(ctx, id, f, wx, wz);
+      if (bt) { r *= bt[0]; g *= bt[1]; b *= bt[2]; }
+    }
 
     const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
@@ -385,9 +422,13 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     const shade = 1;
     const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
     const base = layer >= 0 ? WHITE : Blocks.faceColor(id, f);
-    const r = base[0] * shade;
-    const g = base[1] * shade;
-    const b = base[2] * shade;
+    let r = base[0] * shade;
+    let g = base[1] * shade;
+    let b = base[2] * shade;
+    if (ctx.tints && layer >= 0 && id === ID.WATER) {
+      const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+      r *= ctx.tints.water[o]; g *= ctx.tints.water[o + 1]; b *= ctx.tints.water[o + 2];
+    }
 
     const lit = lightForFace(ctx, f, wx, wy_, wz);
 
@@ -402,7 +443,11 @@ function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const layer = ctx.atlas ? ctx.atlas.layerFor(id, 2) : -1;
   // As in emitCube: with a texture the vertex colour is neutral so the albedo
   // isn't applied twice.
-  const color = layer >= 0 ? WHITE : Blocks.faceColor(id, 2);
+  let color = layer >= 0 ? WHITE : Blocks.faceColor(id, 2);
+  if (ctx.tints && layer >= 0 && id === ID.TALL_GRASS) {
+    const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+    color = [ctx.tints.grass[o], ctx.tints.grass[o + 1], ctx.tints.grass[o + 2]];
+  }
 
   // A cross-quad occupies the same cell it is lit by, so sample light at the
   // block itself rather than at a neighbour. An emissive cross (a torch) would

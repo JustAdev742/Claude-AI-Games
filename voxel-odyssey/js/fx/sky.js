@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import { lerp, clamp, clamp01, mixColor, TAU, smoothstep } from '../core/utils.js';
+import { CHUNK_SX } from '../world/constants.js';
 
 // A full day/night cycle in seconds of (scaled) game time.
 const DAY_LENGTH = 600;            // ~10 minutes
@@ -64,6 +65,10 @@ const CLOUD_DRIFT = 2.4;      // blocks per second toward +x
 
 // sRGB-ish display value -> linear light.
 const lin = (v) => Math.pow(v < 0 ? 0 : v, 2.2);
+
+// Scale from the terrain shader's linear light to the built-in entity lights.
+const ENTITY_GAIN = 0.55;
+const BASE_EXPOSURE = 1.15;
 
 // Cold blue floors blended in at night (linear light).
 const NIGHT_AMBIENT_SKY = [0.010, 0.016, 0.040];
@@ -120,6 +125,7 @@ export class Sky {
     this._ambSky = [0.3, 0.4, 0.6];
     this._ambGround = [0.1, 0.1, 0.1];
     this._sunLight = [1, 1, 1];
+    this._sunOnly = [1, 1, 1];     // direct sun colour without the moonlight floor
     this._horizonLin = [0.4, 0.6, 1];
     this._zenithLin = [0.1, 0.3, 0.8];
     this._elapsed = 0;             // seconds, drives foliage wind sway
@@ -571,15 +577,22 @@ export class Sky {
     for (let i = 0; i < 3; i++) {
       this._ambSky[i] = lin(p.hemiSky[i]) * p.hemiI * 0.80 + NIGHT_AMBIENT_SKY[i] * night;
       this._ambGround[i] = lin(p.hemiGround[i]) * p.hemiI * 0.85 + NIGHT_AMBIENT_GROUND[i] * night;
-      this._sunLight[i] = lin(p.sun[i]) * p.sunI * 1.2 + NIGHT_MOONLIGHT[i] * night;
+      this._sunOnly[i] = lin(p.sun[i]) * p.sunI * 1.2;
+      this._sunLight[i] = this._sunOnly[i] + NIGHT_MOONLIGHT[i] * night;
       this._horizonLin[i] = lin(p.horizon[i]);
       this._zenithLin[i] = lin(p.top[i]);
     }
 
+    // The THREE lights only light what the terrain shader does not: mobs,
+    // dropped items and other entities. Feed them the same linear terms the
+    // terrain shader uses, so a pig standing on grass is lit like the grass.
+    // Three's Lambert divides by pi, hence the PI in the intensities; ENTITY_GAIN
+    // stands in for the terrain shader's tone mapping, which the built-in
+    // materials do not get.
     if (this.hemi) {
-      setColor(this.hemi.color, p.hemiSky);
-      setColor(this.hemi.groundColor, p.hemiGround);
-      this.hemi.intensity = p.hemiI;
+      this.hemi.color.setRGB(this._ambSky[0], this._ambSky[1], this._ambSky[2]);
+      this.hemi.groundColor.setRGB(this._ambGround[0], this._ambGround[1], this._ambGround[2]);
+      this.hemi.intensity = Math.PI * ENTITY_GAIN * this._brightness();
     }
     if (this.sun) {
       // Match the directional light direction to the visible sun position.
@@ -589,17 +602,19 @@ export class Sky {
       // Direction is from the sun toward the scene origin; place the light on
       // the sun side. A little forward z offset keeps shading from being flat.
       this.sun.position.set(sx, Math.max(sy, -0.2), 0.35).multiplyScalar(100);
-      setColor(this.sun.color, p.sun);
-      this.sun.intensity = clamp(p.sunI, 0, 2);
+      // Direct sun only (the night floor lives in the moon light below), and
+      // fading out as it sets so it cannot light from below the horizon.
+      const up = clamp01(smoothstep(-0.05, 0.12, sy));
+      this.sun.color.setRGB(this._sunOnly[0], this._sunOnly[1], this._sunOnly[2]);
+      this.sun.intensity = Math.PI * ENTITY_GAIN * this._brightness() * up;
     }
     if (this.moon) {
       const moonAngle = (t - 0.25) * TAU + Math.PI;
       const mx = Math.cos(moonAngle);
       const my = Math.sin(moonAngle);
       this.moon.position.set(mx, Math.max(my, -0.2), -0.35).multiplyScalar(100);
-      // Moonlight is strongest deep at night, off during the day.
-      const nightFactor = clamp01(smoothstep(0.18, 0.02, p.light)); // bright→0, dark→1
-      this.moon.intensity = 0.22 * nightFactor;
+      this.moon.color.setRGB(NIGHT_MOONLIGHT[0] * 6, NIGHT_MOONLIGHT[1] * 6, NIGHT_MOONLIGHT[2] * 6);
+      this.moon.intensity = Math.PI * ENTITY_GAIN * this._brightness() * night * clamp01(smoothstep(-0.05, 0.12, my));
     }
   }
 
@@ -613,8 +628,15 @@ export class Sky {
       engine.setFogColor(_tmpColor);
       // Widen view by day, tighten a little at night for mood + performance.
       if (typeof engine.setFogRange === 'function') {
-        let near = lerp(28, 44, p.light);
-        let far = lerp(150, 260, p.light);
+        // Fog must END where the world does. Chunks only stream in out to the
+        // render distance, so a fog range reaching past it shows the raw edge
+        // of the loaded terrain (a hard cliff against the sky). Tie the range
+        // to the setting: fully fogged just inside the last loaded chunk.
+        const st = this.game && this.game.state && this.game.state.settings;
+        const rd = st && typeof st.renderDistance === 'number' ? Math.max(2, Math.min(12, st.renderDistance)) : 6;
+        const reach = rd * CHUNK_SX * 0.94;
+        let far = reach * lerp(0.82, 1.0, p.light);     // a little closer at night, for mood
+        let near = far * lerp(0.34, 0.42, p.light);
         // Rain closes the horizon in. Driven by the eased weather intensity,
         // so a shower rolls the fog in over seconds rather than snapping it.
         const weather = this.game && this.game.weather;
@@ -711,6 +733,7 @@ export class Sky {
       sunLight: this._sunLight,
       horizon: this._horizonLin,
       zenith: this._zenithLin,
+      exposure: BASE_EXPOSURE * this._brightness(),
     };
   }
 
@@ -770,6 +793,13 @@ export class Sky {
     if (t >= 0.32 && t < 0.68) return 'day';
     if (t >= 0.68 && t < 0.80) return 'dusk';
     return 'night';
+  }
+
+  // The player's brightness setting (1 = as designed).
+  _brightness() {
+    const s = this.game && this.game.state && this.game.state.settings;
+    const b = s && typeof s.brightness === 'number' ? s.brightness : 1;
+    return b > 0.3 && b < 3 ? b : 1;
   }
 
   _fancy() {

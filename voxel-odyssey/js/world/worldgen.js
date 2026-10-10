@@ -256,6 +256,9 @@ export class WorldGen {
     // First pass: solid terrain, water, beaches, caves, ores — column by
     // column. Cache the per-column descriptors for the decoration pass.
     const cols = new Array(CHUNK_SX * CHUNK_SZ);
+    // Record each column's climate for the mesher's biome tints.
+    const climate = new Float32Array(CHUNK_SX * CHUNK_SZ * 2);
+    chunk.climate = climate;
 
     for (let lx = 0; lx < CHUNK_SX; lx++) {
       const wx = baseX + lx;
@@ -263,6 +266,9 @@ export class WorldGen {
         const wz = baseZ + lz;
         const info = this._column(wx, wz);
         cols[lx * CHUNK_SZ + lz] = info;
+        const ci = (lx * CHUNK_SZ + lz) * 2;
+        climate[ci] = info.temperature;
+        climate[ci + 1] = info.moisture;
         this._fillColumn(chunk, lx, lz, wx, wz, info);
       }
     }

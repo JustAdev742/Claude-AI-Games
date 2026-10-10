@@ -408,6 +408,7 @@ export class Menus {
     // ---- Display -------------------------------------------------------
     panel.appendChild(this._make('h2', { text: 'Display' }));
     panel.appendChild(this._slider('renderDistance', 'Render Distance', 2, 12, 1, (v) => `${v} chunks`));
+    panel.appendChild(this._slider('brightness', 'Brightness', 0.6, 1.6, 0.05, (v) => `${Math.round(v * 100)}%`));
     panel.appendChild(this._slider('fov', 'Field of View', 50, 110, 1, (v) => `${v}°`, (v) => {
       // FOV needs an immediate engine update beyond the settings event.
       const g = this.game;

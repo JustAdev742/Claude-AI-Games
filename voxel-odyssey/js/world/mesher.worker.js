@@ -57,7 +57,7 @@ self.onmessage = (e) => {
 
   if (msg.type !== 'mesh') return;
 
-  const { jobId, cx, cz, blocks, light, ao, smoothLighting } = msg;
+  const { jobId, cx, cz, blocks, light, ao, smoothLighting, climate } = msg;
   const ox = cx * CHUNK_SX;
   const oz = cz * CHUNK_SZ;
 
@@ -109,7 +109,7 @@ self.onmessage = (e) => {
   let data;
   try {
     data = meshChunk(chunkLike, getBlock, {
-      ao, smoothLighting,
+      ao, smoothLighting, climate,
       atlas: atlasShim,
       getLight,
       worldOffset: { x: ox, z: oz },

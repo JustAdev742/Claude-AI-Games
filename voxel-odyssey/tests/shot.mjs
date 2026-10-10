@@ -1,7 +1,7 @@
 /* Grab a gameplay screenshot for eyeballing visual changes.
    Usage: node tests/shot.mjs [outfile] [timeOfDay] [spec-json]
-   spec: { seed, view: 'vista'|'ground'|'tree'|'water'|'underwater', yaw, pitch, dist, log: 'pine'|'birch',
-           give: [item ids], hold: hotbar index }
+   spec: { biome: 'desert'|'jungle'|..., seed, view: 'vista'|'ground'|'tree'|'water'|'underwater', yaw, pitch, dist, log: 'pine'|'birch',
+           give: [item ids], hold: hotbar index, mobs: ['pig', ...] }
    'vista'  hover above the spawn and look down over the terrain (default)
    'ground' stand on the surface at spawn, looking at the horizon
    'tree'   stand a few blocks from the nearest log, looking at its crown
@@ -50,7 +50,36 @@ try {
     let x = px + 0.5, z = pz + 0.5, y = w.heightAt(px, pz) + 14, flying = true;
     const want = spec.log === 'pine' ? [B.PINE_LOG] : spec.log === 'birch' ? [B.BIRCH_LOG] : [B.LOG, B.BIRCH_LOG, B.PINE_LOG];
     const isLog = (id) => want.includes(id);
-    if (spec.view === 'ground') {
+    if (spec.biome || spec.climate) {
+      // Teleport to the nearest column of a named biome (or one inside a
+      // climate box {tMin,tMax,mMin,mMax}) and stand on it.
+      const cl = spec.climate;
+      const want = (bx, bz) => {
+        if (g.worldgen.heightAt(bx, bz) <= 30) return false;
+        if (spec.biome && g.worldgen.biomeAt(bx, bz) !== spec.biome) return false;
+        if (cl) {
+          const c = g.worldgen.columnInfo(bx, bz);
+          if (c.temperature < (cl.tMin ?? 0) || c.temperature > (cl.tMax ?? 1) || c.moisture < (cl.mMin ?? 0) || c.moisture > (cl.mMax ?? 1)) return false;
+        }
+        return true;
+      };
+      let found = null;
+      for (let r = 0; r <= 900 && !found; r += 10) {
+        const steps = Math.max(1, Math.round(r / 5));
+        for (let a = 0; a < steps && !found; a++) {
+          const ang = (a / steps) * Math.PI * 2;
+          const bx = px + Math.round(Math.cos(ang) * r), bz = pz + Math.round(Math.sin(ang) * r);
+          if (want(bx, bz)) found = { bx, bz };
+        }
+      }
+      if (found) {
+        // Chunks around the target are not loaded yet: aim the player there and let streaming catch up.
+        x = found.bx + 0.5; z = found.bz + 0.5;
+        y = g.worldgen.heightAt(found.bx, found.bz) + (spec.view === 'ground' ? 1.01 : 12);
+        flying = spec.view !== 'ground';
+        note = `${spec.biome || 'climate'} at ${found.bx},${found.bz}`;
+      } else note = `no ${spec.biome || 'climate'} match within 900`;
+    } else if (spec.view === 'ground') {
       y = w.heightAt(px, pz) + 1.01; flying = false; pitch = spec.pitch ?? 0.05;
     } else if (spec.view === 'tree') {
       let best = null;
@@ -88,6 +117,12 @@ try {
       g.inventory.selected = spec.hold;
       g.events.emit('hotbar:select', { index: spec.hold, item: g.inventory.selectedItem() });
     }
+    // spec.mobs = ['pig', 'zombie', ...]: line them up in front of the camera.
+    (spec.mobs || []).forEach((type, i) => {
+      const d = 4 + i * 2.2, sx = x - Math.sin(yaw) * d + Math.cos(yaw) * (i % 2 ? 1.8 : -1.8), sz = z - Math.cos(yaw) * d - Math.sin(yaw) * (i % 2 ? 1.8 : -1.8);
+      const gy = w.heightAt(Math.floor(sx), Math.floor(sz)) + 1;
+      g.entities.spawn(type, sx, gy, sz);
+    });
     g.player.flying = flying;
     g.player.position.set(x, y, z);
     g.player.velocity.set(0, 0, 0);
@@ -96,7 +131,7 @@ try {
     return note;
   }, { tod: TOD, spec: SPEC });
   if (info) console.log(info);
-  await sleep(4500);
+  await sleep((SPEC.biome || SPEC.climate) ? 9000 : 4500);
   await page.screenshot({ path: OUT });
   console.log('wrote', OUT);
 } finally {

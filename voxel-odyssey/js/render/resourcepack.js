@@ -63,7 +63,7 @@ export const PACK_ALIASES = {
   crafting_table_side: ['crafting_table_side', 'crafting_table_front'],
   furnace_top: ['furnace_top'],
   furnace_side: ['furnace_front', 'furnace_side'],
-  furnace_lit_side: ['furnace_front_on', 'furnace_side'],
+  furnace_lit_side: ['furnace_front_on'],
   bricks: ['bricks', 'brick'],
   mossy_cobble: ['mossy_cobblestone', 'cobblestone_mossy'],
   clay: ['clay'],

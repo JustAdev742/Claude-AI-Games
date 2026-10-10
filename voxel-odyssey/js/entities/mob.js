@@ -814,7 +814,10 @@ export class Mob {
     if (!mat) return;
     const world = this.game && this.game.world;
 
-    let level = 1;
+    // The scene lights (driven by Sky from the same linear terms as the
+    // terrain shader) already carry time of day, so this only has to express
+    // OCCLUSION: how much sky the mob can see, and how much torchlight reaches it.
+    let level = 1, torch = 0;
     if (world && typeof world.getLightByte === 'function') {
       const packed = world.getLightByte(
         Math.floor(this.position.x),
@@ -823,12 +826,15 @@ export class Mob {
       );
       const sky = ((packed >> 4) & 0x0f) / 15;
       const blk = (packed & 0x0f) / 15;
-      const daylight = (world.uniforms && world.uniforms.uDaylight)
-        ? world.uniforms.uDaylight.value : 1;
-      level = Math.max(sky * daylight, blk);
-      // Same floor the terrain shader uses, so mobs and ground agree.
-      level = Math.max(0.08, Math.pow(level, 1.45));
+      // Same curve as the terrain shader. The floor keeps a mob in a sealed
+      // cave faintly visible rather than a hole in the world.
+      level = Math.max(0.07, Math.pow(sky, 1.45));
+      torch = Math.pow(blk, 1.45);
     }
+
+    // Torchlight can't brighten a Lambert surface through the lights (they are
+    // global), so it arrives as a warm emissive term instead.
+    mat.emissive.setRGB(torch * 0.34, torch * 0.17, torch * 0.07);
 
     if (this.hurtFlash > 0) {
       // Flash toward red without losing the light level entirely.

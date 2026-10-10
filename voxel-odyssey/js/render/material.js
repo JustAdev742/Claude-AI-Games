@@ -393,6 +393,7 @@ export function updateVoxelUniforms(shared, skyState) {
   if (skyState.sunLight) shared.uSunLight.value.setRGB(skyState.sunLight[0], skyState.sunLight[1], skyState.sunLight[2]);
   if (skyState.horizon) shared.uHorizon.value.setRGB(skyState.horizon[0], skyState.horizon[1], skyState.horizon[2]);
   if (skyState.zenith) shared.uZenith.value.setRGB(skyState.zenith[0], skyState.zenith[1], skyState.zenith[2]);
+  if (typeof skyState.exposure === 'number') shared.uExposure.value = skyState.exposure;
   // A faint linear floor so enclosed caves (skylight 0, no torch) stay barely
   // readable rather than pure black; open ground at night is lit by the sky
   // module's moonlight floor, not by this.
