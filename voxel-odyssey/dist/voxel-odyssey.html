@@ -172,6 +172,12 @@ html, body {
   position: absolute; left: 3px; top: 1px; font-size: 10px; color: var(--ink-dim);
 }
 .slot.drag-over { border-color: var(--accent-2); }
+/* Durability bar under worn tools (inventory + hotbar). */
+.slot .dur {
+  display: none; position: absolute; left: 7px; right: 7px; bottom: 4px; height: 4px;
+  background: #000b; border-radius: 2px; overflow: hidden; pointer-events: none;
+}
+.slot .dur i { display: block; height: 100%; width: 100%; }
 
 /* ---- Health / status bars --------------------------------------------- */
 #status-bars {
@@ -244,7 +250,10 @@ html, body {
   background: var(--panel); border: 1px solid var(--slot-border); border-radius: 16px;
   padding: 26px 30px; width: min(560px, 92vw); box-shadow: var(--shadow);
   max-height: 90vh; overflow: auto;
+  /* Scrolls under a finger even though the page itself disables touch panning. */
+  touch-action: pan-y; -webkit-overflow-scrolling: touch;
 }
+@media (max-width: 520px) { .menu-panel { padding: 18px 16px; } }
 .menu-panel h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: 2px; }
 .menu-panel h2 { margin: 18px 0 10px; font-size: 18px; color: var(--accent-2); }
 .menu-panel .subtitle { color: var(--ink-dim); margin: 0 0 18px; font-size: 14px; }
@@ -312,9 +321,18 @@ input[type="range"]::-moz-range-thumb {
 .craft-grid.g2 { grid-template-columns: repeat(2, 1fr); }
 .craft-arrow { font-size: 28px; color: var(--ink-dim); }
 .craft-out .slot { width: 60px; height: 60px; border-color: var(--gold); }
+/* Furnace screen */
+.furnace-area { display: flex; gap: 22px; align-items: center; }
+.furnace-col { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.fuel-label { font-size: 11px; color: var(--ink-dim); letter-spacing: 1px; }
+.flame { width: 18px; height: 22px; background: #0006; border-radius: 4px; display: flex; align-items: flex-end; overflow: hidden; }
+.flame i { display: block; width: 100%; height: 0; background: linear-gradient(#ffd24a, #ff6a1a); }
+.progress { width: 72px; height: 14px; background: #0007; border: 2px solid var(--slot-border); border-radius: 8px; overflow: hidden; }
+.progress i { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #ff9d3a, #ffd24a); }
+.furnace-hint { font-size: 12px; color: var(--ink-dim); margin-top: 8px; max-width: 420px; }
 .section-title { font-size: 13px; color: var(--ink-dim); margin: 14px 0 4px; letter-spacing: 1px; }
 
-.recipe-book { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; }
+.recipe-book { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; max-height: 180px; overflow: auto; touch-action: pan-y; }
 .recipe-book .slot { width: 44px; height: 44px; cursor: pointer; }
 .recipe-book .slot:hover { border-color: var(--accent-2); }
 
@@ -362,24 +380,69 @@ kbd {
 #debug.show { display: block; }
 
 /* ---- Mobile controls (shown only on touch) ---------------------------- */
-#touch-controls { display: none; }
+#touch-controls { position: absolute; inset: 0; pointer-events: none; display: none; touch-action: none; z-index: 1; }
+/* The hotbar must sit above the look zone or taps on it would turn the camera. */
+body.touch #hotbar { z-index: 3; }
 body.touch #touch-controls { display: block; }
+/* Drag anywhere that is not a control to look around. */
+#touch-look { position: absolute; inset: 0; pointer-events: auto; touch-action: none; }
 .touch-stick {
-  position: absolute; bottom: 24px; left: 24px; width: 120px; height: 120px;
-  border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff22; pointer-events: auto;
+  position: absolute; left: calc(26px + env(safe-area-inset-left)); bottom: calc(26px + env(safe-area-inset-bottom));
+  width: 128px; height: 128px; border-radius: 50%;
+  background: #ffffff14; border: 2px solid #ffffff30; pointer-events: auto; touch-action: none;
 }
 .touch-stick .nub {
-  position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%;
-  transform: translate(-50%, -50%); background: #ffffff33; border: 2px solid #ffffff44;
+  position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: #ffffff44; border: 2px solid #ffffff66;
+  pointer-events: none;
 }
 .touch-btn {
-  position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%;
-  background: #ffffff18; border: 2px solid #ffffff28; color: #fff; font-size: 13px;
+  position: absolute; pointer-events: auto; touch-action: none;
+  width: 68px; height: 68px; border-radius: 50%; padding: 0;
+  background: #ffffff1c; border: 2px solid #ffffff38; color: #fff; font: 600 13px var(--font);
   display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent; text-shadow: 1px 1px 0 #0008;
 }
-#touch-jump { right: 28px; bottom: 110px; }
-#touch-place { right: 100px; bottom: 40px; }
-#touch-break { right: 28px; bottom: 40px; }
+.touch-btn.on { background: #ffffff55; border-color: #ffffffaa; }
+.touch-btn.small { width: 52px; height: 52px; font-size: 11px; }
+.touch-btn.top { width: 46px; height: 46px; border-radius: 12px; font-size: 12px; top: calc(12px + env(safe-area-inset-top)); }
+#touch-break { right: calc(24px + env(safe-area-inset-right)); bottom: calc(40px + env(safe-area-inset-bottom)); width: 78px; height: 78px; }
+#touch-place { right: calc(112px + env(safe-area-inset-right)); bottom: calc(30px + env(safe-area-inset-bottom)); }
+#touch-jump  { right: calc(34px + env(safe-area-inset-right)); bottom: calc(132px + env(safe-area-inset-bottom)); }
+#touch-sneak { right: calc(112px + env(safe-area-inset-right)); bottom: calc(110px + env(safe-area-inset-bottom)); }
+#touch-fly   { right: calc(190px + env(safe-area-inset-right)); bottom: calc(60px + env(safe-area-inset-bottom)); }
+/* Left of the day/night dial, which owns the top-right corner. */
+#touch-inv   { right: calc(150px + env(safe-area-inset-right)); }
+#touch-pause { right: calc(96px + env(safe-area-inset-right)); }
+
+/* Portrait phones: let the 9-wide inventory grid shrink to fit the panel. */
+@media (max-width: 600px) {
+  #inventory-screen .menu-panel { padding: 14px 10px; }
+  #inventory-screen .inv-grid { gap: 3px; }
+  #inventory-screen .inv-grid .slot { width: 100%; height: auto; aspect-ratio: 1; border-radius: 6px; }
+  #inventory-screen .inv-grid .slot canvas { width: 78%; height: 78%; }
+  .recipe-book .slot { width: 38px; height: 38px; }
+}
+
+/* Small screens: shrink the HUD so it fits beside the controls. */
+@media (max-height: 520px), (max-width: 720px) {
+  /* Nine slots must fit across the screen, however narrow. */
+  #hotbar .slot { width: min(40px, calc((100vw - 40px) / 9 - 4px)); height: min(40px, calc((100vw - 40px) / 9 - 4px)); border-radius: 6px; }
+  #hotbar .slot canvas { width: 75% !important; height: 75% !important; }
+  #hotbar .slot .key { display: none; }
+  #info-panel { transform: scale(0.8); transform-origin: top left; }
+  .pip { width: 12px; height: 12px; }
+  #status-bars { bottom: 72px; }
+}
+/* Portrait phones: lift the controls above the hotbar. */
+@media (orientation: portrait) and (max-width: 720px) {
+  body.touch .touch-stick { bottom: calc(86px + env(safe-area-inset-bottom)); }
+  body.touch #touch-break { bottom: calc(100px + env(safe-area-inset-bottom)); }
+  body.touch #touch-place { bottom: calc(92px + env(safe-area-inset-bottom)); right: calc(112px + env(safe-area-inset-right)); }
+  body.touch #touch-jump { bottom: calc(190px + env(safe-area-inset-bottom)); }
+  body.touch #touch-sneak { bottom: calc(172px + env(safe-area-inset-bottom)); }
+  body.touch #touch-fly { bottom: calc(122px + env(safe-area-inset-bottom)); }
+}
 
 /* ---- Misc helpers ------------------------------------------------------ */
 .hidden { display: none !important; }
@@ -31216,6 +31279,8 @@ var DEFAULT_SETTINGS = {
   // chunks (clamped 2..12)
   fov: 75,
   // degrees
+  brightness: 1,
+  // exposure multiplier for the terrain and entity lighting
   mouseSensitivity: 1,
   // multiplier
   invertY: false,
@@ -31422,7 +31487,8 @@ var Input = class {
     this._edgeTurn = 0;
     this._pointerX = 0;
     this._pointerY = 0;
-    this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
+    this.touch = { moveX: 0, moveY: 0, lookDX: 0, lookDY: 0, active: false, held: /* @__PURE__ */ new Set() };
+    this._touchPressed = /* @__PURE__ */ new Set();
     this.gamepad = {
       connected: false,
       moveX: 0,
@@ -31674,11 +31740,59 @@ var Input = class {
   }
   action(name) {
     const codes = this.bindings[name];
-    return codes ? this._anyDown(codes) : false;
+    return (codes ? this._anyDown(codes) : false) || this.touch.held.has(name);
   }
   actionPressed(name) {
     const codes = this.bindings[name];
-    return codes ? this._anyPressed(codes) : false;
+    return (codes ? this._anyPressed(codes) : false) || this._touchPressed.has(name);
+  }
+  /* ---- touch input ---- */
+  // Hold or release a virtual action (the on-screen jump / sneak buttons).
+  touchAction(name, down) {
+    if (down) {
+      if (!this.touch.held.has(name)) {
+        this.touch.held.add(name);
+        this._touchPressed.add(name);
+      }
+    } else {
+      this.touch.held.delete(name);
+    }
+  }
+  // One-shot action for this frame (e.g. toggle flight).
+  touchPulse(name) {
+    this._touchPressed.add(name);
+  }
+  // Press or release a mouse button on behalf of an on-screen button.
+  touchButton(button, down) {
+    if (down) {
+      if (!this.buttons.has(button)) {
+        this.buttons.add(button);
+        this._buttonPressed.add(button);
+      }
+    } else if (this.buttons.has(button)) {
+      this.buttons.delete(button);
+      this._buttonReleased.add(button);
+    }
+  }
+  addTouchLook(dx, dy) {
+    this.touch.lookDX += dx;
+    this.touch.lookDY += dy;
+  }
+  consumeTouchLook() {
+    const d = { dx: this.touch.lookDX, dy: this.touch.lookDY };
+    this.touch.lookDX = 0;
+    this.touch.lookDY = 0;
+    return d;
+  }
+  // Let go of everything the touch UI is holding (it was hidden or interrupted).
+  releaseTouch() {
+    this.touch.moveX = 0;
+    this.touch.moveY = 0;
+    this.touch.lookDX = 0;
+    this.touch.lookDY = 0;
+    for (const a of [...this.touch.held]) this.touchAction(a, false);
+    this.touchButton(0, false);
+    this.touchButton(2, false);
   }
   setBinding(name, codes) {
     this.bindings[name] = codes;
@@ -31726,8 +31840,8 @@ var Input = class {
     if (this.action("left")) x -= 1;
     if (this.action("back")) z += 1;
     if (this.action("forward")) z -= 1;
-    x += this.touch.mx;
-    z += this.touch.my;
+    x += this.touch.moveX;
+    z += this.touch.moveY;
     x += this.gamepad.moveX;
     z += this.gamepad.moveZ;
     const len = Math.hypot(x, z);
@@ -31841,6 +31955,7 @@ var Input = class {
     this._released.clear();
     this._buttonPressed.clear();
     this._buttonReleased.clear();
+    this._touchPressed.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
   }
@@ -32066,6 +32181,9 @@ function voxelKey(x, y, z) {
 function chunkKey(cx, cz) {
   return `${cx},${cz}`;
 }
+function isTouchDevice() {
+  return typeof window !== "undefined" && ("ontouchstart" in window || navigator && navigator.maxTouchPoints > 0);
+}
 
 // js/world/blocks.js
 var FACE_SHADE = [0.78, 0.78, 1, 0.5, 0.66, 0.66];
@@ -32149,7 +32267,9 @@ var ID = {
   EMERALD_ORE: 38,
   REDSTONE_ORE: 39,
   LANTERN: 40,
-  LAVA: 41
+  LAVA: 41,
+  FURNACE_LIT: 42
+  // the furnace while it is burning (placed/removed by the furnace system)
 };
 Object.freeze(ID);
 function def(o) {
@@ -32253,7 +32373,7 @@ register(ID.LOG, "log", {
 });
 register(ID.LEAVES, "leaves", {
   name: "Oak Leaves",
-  color: rgb(64, 124, 56),
+  color: rgb(84, 152, 52),
   transparent: true,
   opacity: 2,
   hardness: 0.3,
@@ -32392,6 +32512,16 @@ register(ID.FURNACE, "furnace", {
   tool: "pickaxe",
   walkSound: "stone"
 });
+register(ID.FURNACE_LIT, "furnace_lit", {
+  name: "Furnace",
+  color: rgb(96, 96, 100),
+  top: rgb(80, 80, 84),
+  light: 13,
+  hardness: 2.6,
+  tool: "pickaxe",
+  drop: "furnace",
+  walkSound: "stone"
+});
 register(ID.BRICKS, "bricks", {
   name: "Bricks",
   color: rgb(150, 78, 64),
@@ -32434,7 +32564,7 @@ register(ID.BIRCH_LOG, "birch_log", {
 });
 register(ID.BIRCH_LEAVES, "birch_leaves", {
   name: "Birch Leaves",
-  color: rgb(120, 158, 86),
+  color: rgb(132, 178, 88),
   transparent: true,
   opacity: 2,
   hardness: 0.3,
@@ -32455,7 +32585,7 @@ register(ID.PINE_LOG, "pine_log", {
 });
 register(ID.PINE_LEAVES, "pine_leaves", {
   name: "Pine Needles",
-  color: rgb(40, 92, 64),
+  color: rgb(54, 116, 76),
   transparent: true,
   opacity: 2,
   hardness: 0.3,
@@ -32805,6 +32935,18 @@ var Items = {
   attack(key) {
     const d = REG2.get(key);
     return d ? d.attack : 1;
+  },
+  // Uses a tool survives; 0 for anything that does not wear out.
+  durability(key) {
+    const d = REG2.get(key);
+    return d && d.tool ? d.tool.durability | 0 : 0;
+  },
+  // Fraction of a tool stack's life remaining (1 = new), or null when the
+  // stack is not a worn tool and so needs no durability bar.
+  wearFraction(stack) {
+    if (!stack || !stack.wear) return null;
+    const max = Items.durability(stack.id);
+    return max > 0 ? Math.max(0, Math.min(1, 1 - stack.wear / max)) : null;
   },
   // The drop produced by mining a block, as an item key (or null).
   dropFor(blockId) {
@@ -33370,6 +33512,7 @@ var Noise = class {
 };
 
 // js/world/climate.js
+var CONTINENT_BIAS = 0.12;
 var Spline = class {
   constructor(points) {
     this.points = points;
@@ -33470,7 +33613,7 @@ var Climate = class {
   // feel large; the old generator's 0.0028 produced features every ~250
   // blocks, so you crossed three biomes on a short walk.
   continentalness(x, z) {
-    return this.nContinent.fbm2(x, z, 4, 9e-4, 2, 0.5);
+    return Math.min(1, this.nContinent.fbm2(x, z, 4, 7e-4, 2, 0.5) + CONTINENT_BIAS);
   }
   erosion(x, z) {
     return this.nErosion.fbm2(x, z, 4, 16e-4, 2, 0.5);
@@ -33609,12 +33752,12 @@ var BIOME_TABLE = [
   { name: "snowy_mountains", continent: [0.1, 1], temp: [-1, -0.35], humid: [-1, 1], erosion: [-1, -0.4] },
   { name: "stony_peaks", continent: [0.3, 1], temp: [0.2, 1], humid: [-1, 1], erosion: [-1, -0.65] }
 ];
-function selectBiome(sample, opts) {
+function selectBiome(sample2, opts) {
   const axes = [
-    ["continent", sample.continent],
-    ["temp", sample.temp],
-    ["humid", sample.humid],
-    ["erosion", sample.erosion]
+    ["continent", sample2.continent],
+    ["temp", sample2.temp],
+    ["humid", sample2.humid],
+    ["erosion", sample2.erosion]
   ];
   const excludeOceanic = !!(opts && opts.excludeOceanic);
   let best = null;
@@ -33718,6 +33861,40 @@ var WorldGen = class {
   heightAt(wx, wz) {
     return this._column(wx | 0, wz | 0).height;
   }
+  // How good is (x, z) as a place to begin? 1 = a broad, gentle patch of dry
+  // land; 0 = water or a drop. Samples a 5x5 grid around the point.
+  spawnScore(x, z) {
+    let dry = 0, lo = Infinity, hi = -Infinity;
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const h = this.heightAt(x + dx * 6, z + dz * 6);
+        if (h > SEA + 1) dry++;
+        if (h < lo) lo = h;
+        if (h > hi) hi = h;
+      }
+    }
+    const flat = hi - lo <= 10;
+    return dry / 25 * (flat ? 1 : 0.6);
+  }
+  // Nearest column (spiralling out from the request) whose surroundings are
+  // essentially all dry and gentle; failing that, the best-scoring one seen.
+  findSpawnSpot(wx, wz) {
+    let best = null;
+    const consider = (x, z) => {
+      const score = this.spawnScore(x, z);
+      if (!best || score > best.score) best = { x, z, score };
+      return score >= 0.99;
+    };
+    if (consider(wx, wz)) return best;
+    for (let r = 12; r <= 720; r += 12) {
+      const steps = Math.max(12, Math.round(r / 6));
+      for (let a = 0; a < steps; a++) {
+        const ang = a / steps * Math.PI * 2;
+        if (consider(wx + Math.round(Math.cos(ang) * r), wz + Math.round(Math.sin(ang) * r))) return best;
+      }
+    }
+    return best && best.score >= 0.5 ? best : null;
+  }
   // Full descriptor for external callers (spawning, debug overlay).
   columnInfo(wx, wz) {
     return this._column(wx | 0, wz | 0);
@@ -33799,12 +33976,17 @@ var WorldGen = class {
     const baseZ = cz * CHUNK_SZ;
     const chunkRng = new RNG(hashCombine(this.seed, cx, cz, SALT2.decor));
     const cols = new Array(CHUNK_SX * CHUNK_SZ);
+    const climate = new Float32Array(CHUNK_SX * CHUNK_SZ * 2);
+    chunk.climate = climate;
     for (let lx = 0; lx < CHUNK_SX; lx++) {
       const wx = baseX + lx;
       for (let lz = 0; lz < CHUNK_SZ; lz++) {
         const wz = baseZ + lz;
         const info = this._column(wx, wz);
         cols[lx * CHUNK_SZ + lz] = info;
+        const ci = (lx * CHUNK_SZ + lz) * 2;
+        climate[ci] = info.temperature;
+        climate[ci + 1] = info.moisture;
         this._fillColumn(chunk, lx, lz, wx, wz, info);
       }
     }
@@ -34195,6 +34377,70 @@ function mulberryAt(seed, wx, wz) {
   };
 }
 
+// js/world/biomeColor.js
+var GRASS = [
+  [[0.88, 1.06, 1], [0.74, 1.04, 0.97], [0.66, 1, 0.93]],
+  // cold: cool blue-green
+  [[1.3, 1.04, 0.7], [1, 1, 1], [0.86, 1.06, 0.9]],
+  // temperate: plains is neutral
+  [[1.7, 1.02, 0.5], [1.5, 1.05, 0.55], [0.78, 1.22, 0.58]]
+  // hot: dry savanna gold -> lush jungle
+];
+var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+function sample(grid, t, m, out) {
+  const ft = clamp012(t) * 2, fm = clamp012(m) * 2;
+  const i = Math.min(1, Math.floor(ft)), j = Math.min(1, Math.floor(fm));
+  const u = ft - i, v = fm - j;
+  const a = grid[i][j], b = grid[i][j + 1], c = grid[i + 1][j], d = grid[i + 1][j + 1];
+  for (let k = 0; k < 3; k++) {
+    const top = a[k] + (b[k] - a[k]) * v;
+    const bot = c[k] + (d[k] - c[k]) * v;
+    out[k] = top + (bot - top) * u;
+  }
+  return out;
+}
+var stretchT = (t) => (t - 0.15) / 0.7;
+var stretchM = (m) => (m - 0.2) / 0.6;
+function grassTint(t, m, out = [1, 1, 1]) {
+  return sample(GRASS, stretchT(t), stretchM(m), out);
+}
+function foliageTint(t, m, out = [1, 1, 1]) {
+  grassTint(t, m, out);
+  for (let k = 0; k < 3; k++) out[k] = 1 + (out[k] - 1) * 0.8;
+  return out;
+}
+function waterTint(t, m, out = [1, 1, 1]) {
+  const cold = clamp012((0.3 - t) / 0.3);
+  const hot = clamp012((t - 0.6) / 0.3);
+  const murk = clamp012((m - 0.7) / 0.25) * (1 - cold) * (1 - hot);
+  out[0] = 1 - 0.18 * cold - 0.25 * hot - 0.22 * murk;
+  out[1] = 1 - 0.05 * cold + 0.12 * hot - 0.02 * murk;
+  out[2] = 1 + 0.1 * cold + 0.18 * hot - 0.22 * murk;
+  return out;
+}
+function buildColumnTints(climate, columns) {
+  const grass = new Float32Array(columns * 3);
+  const foliage = new Float32Array(columns * 3);
+  const water = new Float32Array(columns * 3);
+  const tmp2 = [1, 1, 1];
+  for (let i = 0; i < columns; i++) {
+    const t = climate[i * 2], m = climate[i * 2 + 1];
+    grassTint(t, m, tmp2);
+    grass[i * 3] = tmp2[0];
+    grass[i * 3 + 1] = tmp2[1];
+    grass[i * 3 + 2] = tmp2[2];
+    foliageTint(t, m, tmp2);
+    foliage[i * 3] = tmp2[0];
+    foliage[i * 3 + 1] = tmp2[1];
+    foliage[i * 3 + 2] = tmp2[2];
+    waterTint(t, m, tmp2);
+    water[i * 3] = tmp2[0];
+    water[i * 3 + 1] = tmp2[1];
+    water[i * 3 + 2] = tmp2[2];
+  }
+  return { grass, foliage, water };
+}
+
 // js/world/chunk.js
 var Chunk = class _Chunk {
   constructor(cx, cz) {
@@ -34206,6 +34452,7 @@ var Chunk = class _Chunk {
     this.generated = false;
     this.lit = false;
     this.empty = true;
+    this.climate = null;
   }
   /* -------- bounds helpers -------- */
   static inBounds(lx, y, lz) {
@@ -34348,7 +34595,7 @@ function meshChunk(chunk, getBlock, opts) {
   if (!chunk || !chunk.blocks) return { opaque, water, cross };
   const blocks = chunk.blocks;
   const lightArr = chunk.light;
-  const sample = (wx, wy, wz) => {
+  const sample2 = (wx, wy, wz) => {
     const lx = wx - ox;
     const lz = wz - oz;
     if (lx >= 0 && lx < CHUNK_SX && lz >= 0 && lz < CHUNK_SZ && wy >= 0 && wy < CHUNK_SY) {
@@ -34375,7 +34622,9 @@ function meshChunk(chunk, getBlock, opts) {
     }
     return 0;
   };
-  const ctx = { sample, sampleLight, ao, smooth, atlas };
+  const climate = opts.climate || chunk.climate || null;
+  const tints = climate ? buildColumnTints(climate, CHUNK_SX * CHUNK_SZ) : null;
+  const ctx = { sample: sample2, sampleLight, ao, smooth, atlas, tints, ox, oz };
   for (let lx = 0; lx < CHUNK_SX; lx++) {
     const wx = ox + lx;
     for (let lz = 0; lz < CHUNK_SZ; lz++) {
@@ -34409,6 +34658,27 @@ function newBucket() {
     indices: []
   };
 }
+var _bt = [1, 1, 1];
+function biomeTintFor(ctx, id, f, wx, wz) {
+  const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+  if (id === ID.GRASS) {
+    const k = f === 2 ? 1 : f === 3 ? 0 : 0.6;
+    if (k === 0) return null;
+    const t = ctx.tints.grass;
+    _bt[0] = 1 + (t[o] - 1) * k;
+    _bt[1] = 1 + (t[o + 1] - 1) * k;
+    _bt[2] = 1 + (t[o + 2] - 1) * k;
+    return _bt;
+  }
+  if (id === ID.LEAVES || id === ID.BIRCH_LEAVES) {
+    const t = ctx.tints.foliage;
+    _bt[0] = t[o];
+    _bt[1] = t[o + 1];
+    _bt[2] = t[o + 2];
+    return _bt;
+  }
+  return null;
+}
 function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   for (let f = 0; f < 6; f++) {
     const dir = FACES[f].dir;
@@ -34417,13 +34687,21 @@ function emitCube(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     const nz = wz + dir[2];
     const neighbor = ctx.sample(nx, ny, nz);
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
-    const shade2 = FACE_SHADE[f];
+    const shade2 = 1;
     const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
     const source = layer >= 0 ? WHITE : blocks_default.faceColor(id, f);
     const tinted = tintVariation(source, wx, wy_, wz, TINT_SEED, TINT_AMOUNT);
-    const r = tinted[0] * shade2;
-    const g = tinted[1] * shade2;
-    const b = tinted[2] * shade2;
+    let r = tinted[0] * shade2;
+    let g = tinted[1] * shade2;
+    let b = tinted[2] * shade2;
+    if (ctx.tints && layer >= 0) {
+      const bt = biomeTintFor(ctx, id, f, wx, wz);
+      if (bt) {
+        r *= bt[0];
+        g *= bt[1];
+        b *= bt[2];
+      }
+    }
     const aoArr = ctx.ao ? aoForFace(ctx.sample, f, wx, wy_, wz) : null;
     const lit = lightForFace(ctx, f, wx, wy_, wz);
     pushFace(bucket, f, lx, ly, lz, r, g, b, 0, aoArr, lit, layer);
@@ -34440,19 +34718,29 @@ function emitLiquid(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
     const neighbor = ctx.sample(nx, ny, nz);
     if (blocks_default.isLiquid(neighbor)) continue;
     if (!blocks_default.shouldRenderFace(id, neighbor)) continue;
-    const shade2 = FACE_SHADE[f];
+    const shade2 = 1;
     const layer = ctx.atlas ? ctx.atlas.layerFor(id, f) : -1;
     const base = layer >= 0 ? WHITE : blocks_default.faceColor(id, f);
-    const r = base[0] * shade2;
-    const g = base[1] * shade2;
-    const b = base[2] * shade2;
+    let r = base[0] * shade2;
+    let g = base[1] * shade2;
+    let b = base[2] * shade2;
+    if (ctx.tints && layer >= 0 && id === ID.WATER) {
+      const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+      r *= ctx.tints.water[o];
+      g *= ctx.tints.water[o + 1];
+      b *= ctx.tints.water[o + 2];
+    }
     const lit = lightForFace(ctx, f, wx, wy_, wz);
     pushFace(bucket, f, lx, ly, lz, r, g, b, 1 - topY, null, lit, layer);
   }
 }
 function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   const layer = ctx.atlas ? ctx.atlas.layerFor(id, 2) : -1;
-  const color = layer >= 0 ? WHITE : blocks_default.faceColor(id, 2);
+  let color = layer >= 0 ? WHITE : blocks_default.faceColor(id, 2);
+  if (ctx.tints && layer >= 0 && id === ID.TALL_GRASS) {
+    const o = ((wx - ctx.ox) * CHUNK_SZ + (wz - ctx.oz)) * 3;
+    color = [ctx.tints.grass[o], ctx.tints.grass[o + 1], ctx.tints.grass[o + 2]];
+  }
   const packed = ctx.sampleLight(wx, wy_, wz);
   const sky = (packed >> 4 & 15) / 15;
   const blk = (packed & 15) / 15;
@@ -34466,7 +34754,7 @@ function emitCross(bucket, ctx, id, wx, wy_, wz, lx, ly, lz) {
   addQuad(bucket, [x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1], n, r, g, b, lit, layer);
   addQuad(bucket, [x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0], n, r, g, b, lit, layer);
 }
-function aoForFace(sample, f, wx, wy_, wz) {
+function aoForFace(sample2, f, wx, wy_, wz) {
   const dir = FACES[f].dir;
   const bx = wx + dir[0];
   const by = wy_ + dir[1];
@@ -34475,9 +34763,9 @@ function aoForFace(sample, f, wx, wy_, wz) {
   const out = [0, 0, 0, 0];
   for (let c = 0; c < 4; c++) {
     const o = offs[c];
-    const s1 = isOccluder(sample(bx + o.side1[0], by + o.side1[1], bz + o.side1[2]));
-    const s2 = isOccluder(sample(bx + o.side2[0], by + o.side2[1], bz + o.side2[2]));
-    const dg = isOccluder(sample(bx + o.diag[0], by + o.diag[1], bz + o.diag[2]));
+    const s1 = isOccluder(sample2(bx + o.side1[0], by + o.side1[1], bz + o.side1[2]));
+    const s2 = isOccluder(sample2(bx + o.side2[0], by + o.side2[1], bz + o.side2[2]));
+    const dg = isOccluder(sample2(bx + o.diag[0], by + o.diag[1], bz + o.diag[2]));
     out[c] = vertexAO(s1, s2, dg);
   }
   return out;
@@ -35090,6 +35378,7 @@ var VERT = (
 
   uniform float uTime;
   uniform float uWaveStrength;  // >0 makes foliage/liquids sway
+  uniform float uViewmodel;     // 1 = held item: light it from a fixed direction
 
   #include <fog_pars_vertex>
 
@@ -35103,7 +35392,10 @@ var VERT = (
     // normalMatrix because normalMatrix goes to VIEW space, and the sun
     // direction uniform is a world-space vector. Chunk meshes only translate
     // (mat3 = identity); the held-item viewmodel actually rotates.
-    vNormal = mat3(modelMatrix) * normal;
+    // The held item is rotated with the camera every frame, so a world-space
+    // normal would make its shading swim as you look around; its object-space
+    // normal is stable and is lit by a fixed light instead.
+    vNormal = uViewmodel > 0.5 ? normal : mat3(modelMatrix) * normal;
 
     vec3 pos = position;
 
@@ -35151,17 +35443,51 @@ var FRAG = (
   // selects the layer. See render/atlas.js.
   uniform sampler2DArray uAtlas;
   uniform float uHasAtlas;
-  uniform vec3 uSkyTint;      // colour sunlight contributes (warm at dusk)
   uniform vec3 uBlockTint;    // colour torches contribute (fixed warm orange)
   uniform vec3 uSunDir;       // world-space direction toward the sun/moon
-  uniform float uDaylight;    // 0 = midnight, 1 = noon
-  uniform float uAmbient;     // floor so caves are dark but not unreadable
+  uniform vec3 uAmbSky;       // linear ambient light from straight above
+  uniform vec3 uAmbGround;    // linear ambient light bounced up from below
+  uniform vec3 uSunLight;     // linear colour * strength of direct sun/moon
+  uniform vec3 uHorizon;      // linear sky colour at the horizon
+  uniform vec3 uZenith;       // linear sky colour overhead
+  uniform float uExposure;
+  uniform float uAmbient;     // linear floor so caves are dark but not unreadable
+  uniform float uTime;
   uniform float uOpacity;
   uniform float uAlphaTest;
+  uniform float uIsWater;     // 1 = shade as a reflective water surface
+  uniform float uViewmodel;   // 1 = held item: fixed light direction
 
   ${LIGHT_CURVE_GLSL}
 
   #include <fog_pars_fragment>
+
+  vec3 toLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+
+  // Extended Reinhard: keeps shadows and mid-tones where they are (no filmic
+  // toe to crush the dark end) and rolls highlights off smoothly instead of
+  // clipping, so snow and sunlit sand stay readable at noon.
+  vec3 toneMap(vec3 c) {
+    const float W2 = 6.0;   // white point squared
+    return c * (1.0 + c / W2) / (1.0 + c);
+  }
+
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  // Slope (d height / dx, d height / dz) of the water surface: three layers of
+  // travelling ripples at different scales and speeds, so the surface never
+  // shows an obvious repeat or a single direction of travel.
+  vec2 waterSlope(vec2 p, float t) {
+    vec2 g = vec2(0.0);
+    g += vec2(cos(p.x * 1.30 + p.y * 0.70 + t * 1.10), cos(p.y * 1.10 + p.x * 0.50 - t * 0.90)) * 0.085;
+    g += vec2(cos(p.x * 3.10 - t * 1.90), cos(p.y * 2.70 + p.x * 1.30 + t * 1.60)) * 0.045;
+    g += vec2(cos(p.x * 7.30 + p.y * 3.10 + t * 2.70), cos(p.y * 6.10 - p.x * 2.90 - t * 2.30)) * 0.020;
+    return g;
+  }
 
   void main() {
     vec4 base = vec4(vColor, 1.0);
@@ -35174,32 +35500,73 @@ var FRAG = (
       base = vec4(tex.rgb * vColor, tex.a);
     }
 
-    // --- combine the two light channels -----------------------------------
-    float sky = lightCurve(vLight.x) * uDaylight;
-    float blk = lightCurve(vLight.y);
+    vec3 albedo = toLinear(base.rgb);
 
-    // Directional sun term. Only the SKY channel gets it \u2014 torchlight is
-    // omnidirectional. Faces turned toward the sun brighten through the day
-    // as it arcs overhead; the 0.72 floor keeps away-facing sides lit by sky
-    // scatter rather than pitch black (the baked flood-fill already handles
-    // true occlusion). Back faces of double-sided foliage flip the normal so
-    // both sides of a cross-quad read identically.
+    // Baked light: how much sky / torch reaches this face (0..1).
+    float skyVis = lightCurve(vLight.x);
+    float blkVis = lightCurve(vLight.y);
+
+    // Back faces of double-sided foliage flip the normal so both sides of a
+    // cross-quad read identically.
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
-    float ndl = 0.72 + 0.28 * max(dot(N, uSunDir), 0.0);
 
-    vec3 skyContrib = uSkyTint * sky * ndl;
-    vec3 blkContrib = uBlockTint * blk;
+    vec3 L = uSunDir;
+    if (uViewmodel > 0.5) L = normalize(vec3(0.45, 0.8, 0.4));
 
-    // Take the stronger channel and add a fraction of the weaker one. A plain
-    // sum would blow out to white where a torch sits in daylight; a plain max
-    // would make torches invisible outdoors. This keeps both readable.
-    vec3 light = max(skyContrib, blkContrib) + min(skyContrib, blkContrib) * 0.32;
-    light = max(light, vec3(uAmbient));
+    // Water gets a rippled normal on its top surface; everything else shades
+    // from its face normal.
+    vec3 Nl = N;
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    if (uIsWater > 0.5 && N.y > 0.5) {
+      vec2 g = waterSlope(vWorldPos.xz, uTime);
+      Nl = normalize(vec3(-g.x, 1.0, -g.y));
+    }
 
-    vec3 rgb = base.rgb * light * vAO;
+    // --- sky light: hemisphere ambient + direct sun ------------------------
+    float up = Nl.y * 0.5 + 0.5;
+    vec3 hemi = mix(uAmbGround, uAmbSky, up);
+    float ndl = max(dot(Nl, L), 0.0);
+    // Direct light only reaches cells that can see most of the sky, which is a
+    // cheap stand-in for a shadow: under a canopy or an overhang the baked sky
+    // level drops and the sun term fades out while the ambient survives.
+    float sunVis = smoothstep(0.50, 0.92, skyVis);
+    vec3 skyLight = hemi * skyVis + uSunLight * ndl * sunVis;
 
-    gl_FragColor = vec4(rgb, base.a * uOpacity);
+    // --- torch light --------------------------------------------------------
+    vec3 blkLight = uBlockTint * blkVis * 1.7;
+
+    vec3 light = max(skyLight + blkLight, vec3(uAmbient));
+    // Vertex ambient occlusion: the mesher's 0.7..1 range reads faint once the
+    // light is linear, so square it to get properly dark creases and corners.
+    float ao = vAO * vAO;
+    vec3 lit = albedo * light * ao;
+    float alpha = base.a * uOpacity;
+
+    if (uIsWater > 0.5) {
+      // Fresnel: look straight down and you see through the water; look along
+      // it and you see the sky in it.
+      float cosT = max(dot(Nl, V), 0.0);
+      float fres = 0.03 + 0.97 * pow(1.0 - cosT, 4.0);
+      vec3 R = reflect(-V, Nl);
+      vec3 sky = mix(uHorizon, uZenith, pow(clamp(R.y, 0.0, 1.0), 0.55));
+      lit = mix(lit, sky * (0.35 + 0.65 * sunVis), fres * (N.y > 0.5 ? 1.0 : 0.35));
+      // Sun / moon glint on the ripples.
+      float spec = pow(max(dot(R, L), 0.0), 240.0);
+      lit += uSunLight * spec * 3.0 * sunVis * step(0.0, L.y);
+      alpha = clamp(mix(alpha, 0.97, fres), 0.0, 1.0);
+    }
+
+    lit *= uExposure;
+    vec3 mapped = toneMap(lit);
+    // A touch of saturation back: tone mapping pulls everything toward grey.
+    float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+    mapped = mix(vec3(luma), mapped, 1.12);
+    vec3 rgb = pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2));
+    // Sub-LSB noise breaks up banding in the long dark gradients.
+    rgb += (hash12(gl_FragCoord.xy) - 0.5) / 255.0;
+
+    gl_FragColor = vec4(rgb, alpha);
 
     #include <fog_fragment>
   }
@@ -35215,10 +35582,18 @@ function createSharedUniforms() {
     uAtlas: { value: makeFallbackArrayTexture() },
     uHasAtlas: { value: 0 },
     uSkyTint: { value: new Color(1, 1, 1) },
-    uBlockTint: { value: new Color(1, 0.78, 0.52) },
+    // Linear light: torchlight is warm orange, strong enough to read in a
+    // cave and to hold its own against dusk ambient.
+    uBlockTint: { value: new Color(1, 0.55, 0.22) },
     uSunDir: { value: new Vector3(0.35, 0.85, 0.4).normalize() },
+    uAmbSky: { value: new Color(0.3, 0.45, 0.7) },
+    uAmbGround: { value: new Color(0.12, 0.11, 0.09) },
+    uSunLight: { value: new Color(1.3, 1.25, 1.1) },
+    uHorizon: { value: new Color(0.35, 0.58, 1) },
+    uZenith: { value: new Color(0.06, 0.24, 0.8) },
+    uExposure: { value: 1.15 },
     uDaylight: { value: 1 },
-    uAmbient: { value: 0.035 },
+    uAmbient: { value: 6e-3 },
     uTime: { value: 0 }
   };
 }
@@ -35229,7 +35604,9 @@ function createVoxelMaterials(shared) {
       {
         uOpacity: { value: 1 },
         uAlphaTest: { value: 0.5 },
-        uWaveStrength: { value: 0 }
+        uWaveStrength: { value: 0 },
+        uIsWater: { value: 0 },
+        uViewmodel: { value: 0 }
       }
     ]);
     Object.assign(uniforms, shared);
@@ -35254,8 +35631,9 @@ function createVoxelMaterials(shared) {
     // don't occlude other transparent surfaces
     side: FrontSide
   }, {
-    uOpacity: { value: 0.78 },
-    uWaveStrength: { value: 0.35 }
+    uOpacity: { value: 0.66 },
+    uWaveStrength: { value: 0.35 },
+    uIsWater: { value: 1 }
   });
   const foliage = mk({
     name: "voxel-foliage",
@@ -35268,6 +35646,8 @@ function createVoxelMaterials(shared) {
   const viewmodel = mk({
     name: "voxel-viewmodel",
     fog: false
+  }, {
+    uViewmodel: { value: 1 }
   });
   return { opaque, water, foliage, viewmodel };
 }
@@ -35280,7 +35660,13 @@ function updateVoxelUniforms(shared, skyState) {
   }
   if (typeof skyState.time === "number") shared.uTime.value = skyState.time;
   if (skyState.sunDir) shared.uSunDir.value.copy(skyState.sunDir);
-  shared.uAmbient.value = 0.028 + 0.012 * d;
+  if (skyState.ambSky) shared.uAmbSky.value.setRGB(skyState.ambSky[0], skyState.ambSky[1], skyState.ambSky[2]);
+  if (skyState.ambGround) shared.uAmbGround.value.setRGB(skyState.ambGround[0], skyState.ambGround[1], skyState.ambGround[2]);
+  if (skyState.sunLight) shared.uSunLight.value.setRGB(skyState.sunLight[0], skyState.sunLight[1], skyState.sunLight[2]);
+  if (skyState.horizon) shared.uHorizon.value.setRGB(skyState.horizon[0], skyState.horizon[1], skyState.horizon[2]);
+  if (skyState.zenith) shared.uZenith.value.setRGB(skyState.zenith[0], skyState.zenith[1], skyState.zenith[2]);
+  if (typeof skyState.exposure === "number") shared.uExposure.value = skyState.exposure;
+  shared.uAmbient.value = 4e-3 + 3e-3 * d;
 }
 
 // js/world/meshPool.js
@@ -35408,6 +35794,8 @@ var MeshPool = class {
       cz: chunk.cz,
       blocks,
       light,
+      climate: chunk.climate,
+      // copied, not transferred: the chunk keeps it
       ao: true,
       smoothLighting: settings.smoothLighting !== false
     }, [blocks.buffer, light.buffer]);
@@ -35708,20 +36096,12 @@ var World = class {
     wx = Math.floor(wx);
     wz = Math.floor(wz);
     const wg = this.game && this.game.worldgen;
-    if (wg && typeof wg.heightAt === "function" && wg.heightAt(wx, wz) <= WATER_LEVEL) {
-      outer:
-        for (let r = 8; r <= 256; r += 8) {
-          for (let a = 0; a < 16; a++) {
-            const ang = a / 16 * Math.PI * 2;
-            const sx = wx + Math.round(Math.cos(ang) * r);
-            const sz = wz + Math.round(Math.sin(ang) * r);
-            if (wg.heightAt(sx, sz) > WATER_LEVEL + 1) {
-              wx = sx;
-              wz = sz;
-              break outer;
-            }
-          }
-        }
+    if (wg && typeof wg.findSpawnSpot === "function") {
+      const spot = wg.findSpawnSpot(wx, wz);
+      if (spot) {
+        wx = spot.x;
+        wz = spot.z;
+      }
     }
     let h = this.heightAt(wx, wz);
     if (h < 0) h = WATER_LEVEL;
@@ -36072,7 +36452,7 @@ function buildBlockGeometry(blockId, atlas, size = 1) {
   for (let f = 0; f < 6; f++) {
     const face = FACES[f];
     const dir = face.dir;
-    const shade2 = FACE_SHADE[f];
+    const shade2 = 1;
     const layer = atlas ? atlas.layerFor(blockId, f) : -1;
     const faceUV = FACE_UVS[f];
     const base = layer >= 0 ? [1, 1, 1] : blocks_default.faceColor(blockId, f);
@@ -36102,6 +36482,55 @@ function buildBlockGeometry(blockId, atlas, size = 1) {
   geom.computeBoundingSphere();
   geom.userData.voxelFormat = true;
   return geom;
+}
+function packVoxelGeometry(positions, normals, colors, indices) {
+  const n = positions.length / 3;
+  const light = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) light[i * 2] = 1;
+  const geom = new BufferGeometry();
+  geom.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
+  geom.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
+  geom.setAttribute("aColor", new BufferAttribute(new Float32Array(colors), 3));
+  geom.setAttribute("aLight", new BufferAttribute(light, 2));
+  geom.setAttribute("aAO", new BufferAttribute(new Float32Array(n).fill(1), 1));
+  geom.setAttribute("uv", new BufferAttribute(new Float32Array(n * 2), 2));
+  geom.setAttribute("aTexIdx", new BufferAttribute(new Float32Array(n).fill(-1), 1));
+  geom.setIndex(new BufferAttribute(new Uint32Array(indices), 1));
+  geom.computeBoundingSphere();
+  geom.userData.voxelFormat = true;
+  return geom;
+}
+function buildSpriteGeometry(rgba, w, h, size = 0.6) {
+  const positions = [], normals = [], colors = [], indices = [];
+  const px2 = size / w;
+  const depth = px2;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < w && y < h && rgba[(y * w + x) * 4 + 3] >= 110;
+  const quad = (a, b, c, d, n, col) => {
+    const base = positions.length / 3;
+    for (const v of [a, b, c, d]) {
+      positions.push(v[0], v[1], v[2]);
+      normals.push(n[0], n[1], n[2]);
+      colors.push(col[0], col[1], col[2]);
+    }
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!solid(x, y)) continue;
+      const i = (y * w + x) * 4;
+      const col = [rgba[i] / 255, rgba[i + 1] / 255, rgba[i + 2] / 255];
+      const x0 = (x - w / 2) * px2, x1 = x0 + px2;
+      const y1 = (h / 2 - y) * px2, y0 = y1 - px2;
+      const z0 = -depth / 2, z1 = depth / 2;
+      quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1], col);
+      quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [0, 0, -1], col);
+      if (!solid(x + 1, y)) quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [1, 0, 0], col);
+      if (!solid(x - 1, y)) quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0], col);
+      if (!solid(x, y - 1)) quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], [0, 1, 0], col);
+      if (!solid(x, y + 1)) quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0], col);
+    }
+  }
+  return packVoxelGeometry(positions, normals, colors, indices);
 }
 function setBlockGeometryLight(geom, sky, block) {
   const attr = geom && geom.attributes && geom.attributes.aLight;
@@ -36141,6 +36570,7 @@ var REACH = 5;
 var PLACE_COOLDOWN = 0.18;
 var ATTACK_COOLDOWN = 0.45;
 var IFRAME_TIME = 0.5;
+var TOUCH_LOOK = 1.5;
 var FALL_SAFE = 3.2;
 var FALL_DAMAGE_PER_BLOCK = 1;
 var DROWN_GRACE = 11;
@@ -36190,6 +36620,7 @@ var Player = class {
     this._mineSwinging = false;
     this._eyeY = EYE_HEIGHT;
     this._viewmodel = null;
+    this._vmGeoms = [];
     this._viewmodelKey = void 0;
     this._moveEventTimer = 0;
     this._tmpV = new Vector3();
@@ -36310,9 +36741,11 @@ var Player = class {
       const d = input.lookDelta(settings.lookSmoothing);
       dx = d.dx;
       dy = d.dy;
-    } else if (input.touch && input.touch.active) {
-      dx = input.touch.mx || 0;
-      dy = input.touch.my || 0;
+    }
+    if (input.touch && input.touch.active) {
+      const t = input.consumeTouchLook();
+      dx += t.dx * TOUCH_LOOK;
+      dy += t.dy * TOUCH_LOOK;
     }
     const invert = settings.invertY ? -1 : 1;
     this.yaw -= dx * sens;
@@ -36681,20 +37114,18 @@ var Player = class {
     const heldKey = held ? held.id : null;
     const leftHeld = input.mouseDown ? input.mouseDown(0) : false;
     const leftPressed = input.mousePressed ? input.mousePressed(0) : false;
-    const touchBreak = input.touch && input.touch.break;
     if (leftPressed) {
       if (this._tryAttack(eye, dir, heldKey)) {
       }
     }
-    if ((leftHeld || touchBreak) && hit) {
+    if (leftHeld && hit) {
       this._tickMining(dt, hit, heldKey);
     } else {
       this.mineProgress = 0;
       this._miningKey = null;
     }
     const rightPressed = input.mousePressed ? input.mousePressed(2) : false;
-    const touchPlace = input.touch && input.touch.place;
-    if ((rightPressed || touchPlace) && this._placeTimer <= 0) {
+    if (rightPressed && this._placeTimer <= 0) {
       this._handleUse(hit, held, heldKey);
       this._placeTimer = PLACE_COOLDOWN;
     }
@@ -36778,6 +37209,7 @@ var Player = class {
       }
     }
     if (this.game.state) this.game.state.addStat("blocksMined", 1);
+    if (drop && (blocks_default.get(blockId) || {}).hardness > 0) this._wearHeldTool(1);
     if (drop) {
       const dropKey = items_default.dropFor(blockId);
       if (dropKey && this.game.entities && typeof this.game.entities.dropItem === "function") {
@@ -36786,6 +37218,20 @@ var Player = class {
         } catch (_) {
         }
       }
+    }
+  }
+  // Spend durability on the held tool; announce it if it breaks.
+  _wearHeldTool(uses) {
+    const inv = this.game.inventory;
+    if (!inv || typeof inv.wearSelected !== "function" || this.isCreative) return;
+    const held = inv.selectedItem();
+    if (!held || !items_default.durability(held.id)) return;
+    const name = items_default.name(held.id);
+    if (inv.wearSelected(uses)) {
+      this.game.toast(`Your ${name} broke!`, "warn");
+      this._emitSfx("break", { surface: "wood" });
+      this._miningKey = null;
+      this.mineProgress = 0;
     }
   }
   // Try to attack a mob under the crosshair. Returns true if a mob was hit.
@@ -36801,6 +37247,10 @@ var Player = class {
     }
     if (!result || !result.entity) return false;
     const dmg = items_default.attack(heldKey);
+    if (!this.isCreative) {
+      const tool = items_default.get(heldKey) && items_default.get(heldKey).tool;
+      if (tool) this._wearHeldTool(tool.type === "sword" ? 1 : 2);
+    }
     this._attackTimer = ATTACK_COOLDOWN;
     this._swing = 1;
     try {
@@ -36818,6 +37268,12 @@ var Player = class {
       if (hit.blockId === ID.CRAFTING_TABLE) {
         if (this.game.menus && typeof this.game.menus.toggleInventory === "function") {
           this.game.menus.toggleInventory(true);
+          return;
+        }
+      }
+      if (hit.blockId === ID.FURNACE || hit.blockId === ID.FURNACE_LIT) {
+        if (this.game.menus && typeof this.game.menus.openFurnace === "function") {
+          this.game.menus.openFurnace(hit.block.x, hit.block.y, hit.block.z);
           return;
         }
       }
@@ -37084,37 +37540,59 @@ var Player = class {
       this._disposeObject(this._viewmodel);
       this._viewmodel = null;
     }
-    this._vmBlockGeom = null;
+    this._vmGeoms = [];
     if (!itemKey) return;
-    const group = new Group();
-    const item = items_default.get(itemKey);
     const world = this.game.world;
-    if (item && items_default.isPlaceable(itemKey) && item.blockId !== void 0 && world && world.matViewmodel) {
-      const geom = buildBlockGeometry(item.blockId, world.atlas, 0.42);
-      const cube = new Mesh(geom, world.matViewmodel);
-      cube.frustumCulled = false;
-      group.add(cube);
-      this._vmBlockGeom = geom;
+    const mat = world && world.matViewmodel;
+    if (!mat) return;
+    const item = items_default.get(itemKey);
+    const group = new Group();
+    const holder = new Group();
+    group.add(holder);
+    const blockDef = item && item.blockId !== void 0 ? blocks_default.get(item.blockId) : null;
+    const isCube = !!blockDef && blockDef.render !== "cross" && blockDef.render !== "air";
+    let geom;
+    if (isCube) {
+      geom = buildBlockGeometry(item.blockId, world.atlas, 0.3);
+      holder.rotation.set(0.32, 0.72, 0.02);
+      holder.position.set(0, 0, 0);
     } else {
-      let col = [0.7, 0.7, 0.72];
-      if (item && item.icon && item.icon.color) col = item.icon.color;
-      const mat = new MeshLambertMaterial({ color: new Color(col[0], col[1], col[2]) });
-      const bar = new Mesh(new BoxGeometry(0.1, 0.5, 0.1), mat);
-      bar.rotation.z = -0.5;
-      group.add(bar);
+      const px2 = this._itemPixels(itemKey, 16);
+      if (!px2) return;
+      const tool = item && item.category === "tool";
+      geom = buildSpriteGeometry(px2, 16, 16, tool ? 0.52 : 0.42);
+      if (tool) {
+        holder.rotation.set(-0.08, 0.42, -0.3);
+        holder.position.set(-0.02, 0.1, 0);
+      } else {
+        holder.rotation.set(0.05, 0.4, -0.1);
+        holder.position.set(0, 0.04, 0);
+      }
     }
-    if (!this._vmBlockGeom) {
-      const light = new DirectionalLight(16777215, 0.9);
-      light.position.set(0.5, 1, 1);
-      group.add(light);
-      group.add(new AmbientLight(16777215, 0.5));
-    }
+    const mesh = new Mesh(geom, mat);
+    mesh.frustumCulled = false;
+    holder.add(mesh);
+    this._vmGeoms.push(geom);
     this._viewmodel = group;
     vmScene.add(group);
   }
+  // Rasterise an item's inventory icon to RGBA pixels. Returns null where
+  // there is no canvas (tests running under Node).
+  _itemPixels(itemKey, n) {
+    if (typeof document === "undefined") return null;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = n;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(n, 0);
+    ctx.scale(-1, 1);
+    items_default.drawIcon(ctx, itemKey, n);
+    return ctx.getImageData(0, 0, n, n).data;
+  }
   _updateViewmodel(dt) {
     if (!this._viewmodel) return;
-    if (this._vmBlockGeom) {
+    if (this._vmGeoms && this._vmGeoms.length) {
       const world = this.game.world;
       let sky = 1, blk = 0;
       if (world && typeof world.getLightByte === "function") {
@@ -37126,7 +37604,7 @@ var Player = class {
         sky = (packed >> 4 & 15) / 15;
         blk = (packed & 15) / 15;
       }
-      setBlockGeometryLight(this._vmBlockGeom, sky, blk);
+      for (const g of this._vmGeoms) setBlockGeometryLight(g, sky, blk);
     }
     const bob = this._bobAmount;
     const t = this.game.elapsed || 0;
@@ -37140,7 +37618,7 @@ var Player = class {
     }
     const chop = this._chopAmp * (0.5 - 0.5 * Math.cos(this._swingPhase * Math.PI * 2));
     const a = Math.sin(Math.min(1, Math.max(this._swing, chop)) * Math.PI);
-    const baseX = 0.55, baseY = -0.45, baseZ = -0.9;
+    const baseX = 0.5, baseY = -0.42, baseZ = -0.82;
     const idleBob = Math.sin(t * 2) * 0.01 * (1 - bob) + Math.sin(t * 9) * 0.015 * bob;
     this._viewmodel.position.set(
       baseX - a * 0.16,
@@ -37153,7 +37631,7 @@ var Player = class {
       this._viewmodel.position.add(cam.position);
       this._viewmodel.quaternion.copy(cam.quaternion);
       this._viewmodel.rotateX(-a * 1.25);
-      this._viewmodel.rotateY(0.3 + a * 0.32);
+      this._viewmodel.rotateY(a * 0.32);
       this._viewmodel.rotateZ(-a * 0.28);
     }
   }
@@ -37934,7 +38412,7 @@ var Mob = class {
     const mat = this._mat;
     if (!mat) return;
     const world = this.game && this.game.world;
-    let level = 1;
+    let level = 1, torch = 0;
     if (world && typeof world.getLightByte === "function") {
       const packed = world.getLightByte(
         Math.floor(this.position.x),
@@ -37943,10 +38421,10 @@ var Mob = class {
       );
       const sky = (packed >> 4 & 15) / 15;
       const blk = (packed & 15) / 15;
-      const daylight = world.uniforms && world.uniforms.uDaylight ? world.uniforms.uDaylight.value : 1;
-      level = Math.max(sky * daylight, blk);
-      level = Math.max(0.08, Math.pow(level, 1.45));
+      level = Math.max(0.07, Math.pow(sky, 1.45));
+      torch = Math.pow(blk, 1.45);
     }
+    mat.emissive.setRGB(torch * 0.34, torch * 0.17, torch * 0.07);
     if (this.hurtFlash > 0) {
       const t = Math.min(1, this.hurtFlash / HURT_FLASH_TIME);
       mat.color.setRGB(level + (1 - level) * t, level * (1 - t * 0.75), level * (1 - t * 0.75));
@@ -38492,9 +38970,9 @@ var EntityManager = class {
       const geo = new BoxGeometry(0.28, 0.28, 0.28);
       const mat = new MeshLambertMaterial({
         color: new Color(
-          clamp012(color[0]),
-          clamp012(color[1]),
-          clamp012(color[2])
+          clamp013(color[0]),
+          clamp013(color[1]),
+          clamp013(color[2])
         )
       });
       mesh = new Mesh(geo, mat);
@@ -38932,13 +39410,19 @@ var EntityManager = class {
     this._spawnTimer = SPAWN_INTERVAL;
   }
 };
-function clamp012(v) {
+function clamp013(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 // js/items/inventory.js
 var HOTBAR_SLOTS = 9;
 var TOTAL_SLOTS = 36;
+function cloneStack(s, count) {
+  if (!s) return null;
+  const c = { id: s.id, count: count === void 0 ? s.count : count };
+  if (s.wear) c.wear = s.wear;
+  return c;
+}
 var Inventory = class {
   constructor(game) {
     this.game = game || null;
@@ -39043,6 +39527,21 @@ var Inventory = class {
     if (changed) this._emitChange();
     return remaining;
   }
+  // Add a whole stack, preserving its tool wear. Worn tools (stack size 1)
+  // cannot merge, so they go to the first empty slot; everything else takes the
+  // ordinary add() path. Returns the number that did not fit.
+  addStack(stack) {
+    if (!stack || !stack.id || !(stack.count > 0)) return 0;
+    if (!stack.wear) return this.add(stack.id, stack.count);
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      if (this.slots[i] == null) {
+        this.slots[i] = cloneStack(stack);
+        this._emitChange();
+        return 0;
+      }
+    }
+    return stack.count;
+  }
   // How many of `itemKey` would fit right now (without mutating). Used to guard
   // operations that must not silently destroy items (e.g. crafting output).
   spaceFor(itemKey, count = 1) {
@@ -39073,6 +39572,24 @@ var Inventory = class {
     if (s.count <= 0) this.slots[slot] = null;
     this._emitChange();
     return removed;
+  }
+  // Spend `uses` of the held tool's durability. When it is used up the tool
+  // breaks: the slot empties and 'tool:break' fires. Returns true if it broke.
+  // (Callers skip this in creative mode.)
+  wearSelected(uses = 1) {
+    const s = this.slots[this.selected];
+    const max = s ? items_default.durability(s.id) : 0;
+    if (!s || max <= 0 || !(uses > 0)) return false;
+    s.wear = (s.wear || 0) + uses;
+    if (s.wear >= max) {
+      this.slots[this.selected] = null;
+      const ev = this._events();
+      if (ev) ev.emit("tool:break", { id: s.id });
+      this._emitChange();
+      return true;
+    }
+    this._emitChange();
+    return false;
   }
   // Remove up to `count` from the currently selected hotbar slot.
   removeSelected(count = 1) {
@@ -39155,7 +39672,7 @@ var Inventory = class {
     if (!this._valid(slot) || !stack || !stack.id || stack.count <= 0) return stack || null;
     const existing = this.slots[slot];
     if (!existing) {
-      this.slots[slot] = { id: stack.id, count: Math.floor(stack.count) };
+      this.slots[slot] = cloneStack(stack, Math.floor(stack.count));
       this._emitChange();
       return null;
     }
@@ -39168,7 +39685,7 @@ var Inventory = class {
       this._emitChange();
       return leftover > 0 ? { id: stack.id, count: leftover } : null;
     }
-    this.slots[slot] = { id: stack.id, count: Math.floor(stack.count) };
+    this.slots[slot] = cloneStack(stack, Math.floor(stack.count));
     this._emitChange();
     return existing;
   }
@@ -39202,7 +39719,7 @@ var Inventory = class {
   serialize() {
     return {
       selected: this.selected,
-      slots: this.slots.map((s) => s ? { id: s.id, count: s.count } : null)
+      slots: this.slots.map((s) => cloneStack(s))
     };
   }
   // Restore from a serialized object. Tolerant of missing/short/long data.
@@ -39214,6 +39731,8 @@ var Inventory = class {
       if (s && typeof s.id === "string" && Number.isFinite(s.count) && s.count > 0) {
         if (items_default && typeof items_default.has === "function" && !items_default.has(s.id)) continue;
         next[i] = { id: s.id, count: Math.max(1, Math.floor(s.count)) };
+        const max = items_default.durability(s.id);
+        if (max > 0 && Number.isFinite(s.wear) && s.wear > 0) next[i].wear = Math.min(max - 1, Math.floor(s.wear));
       }
     }
     this.slots = next;
@@ -39409,10 +39928,10 @@ var Crafting = class {
   _recipeIngredients(recipe) {
     const counts = /* @__PURE__ */ new Map();
     const addToken = (token) => {
-      const sample = tokenSample(token);
-      if (sample == null) return;
+      const sample2 = tokenSample(token);
+      if (sample2 == null) return;
       const key = token;
-      const e = counts.get(key) || { token, sample, count: 0 };
+      const e = counts.get(key) || { token, sample: sample2, count: 0 };
       e.count++;
       counts.set(key, e);
     };
@@ -39649,6 +40168,192 @@ function buildRecipes() {
 function cap2(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+// js/items/furnace.js
+var SMELTING = {
+  raw_iron: { out: "iron_ingot", time: 10 },
+  raw_gold: { out: "gold_ingot", time: 10 },
+  raw_meat: { out: "cooked_meat", time: 8 },
+  clay_ball: { out: "brick", time: 10 },
+  sand: { out: "glass", time: 10 },
+  cobblestone: { out: "stone", time: 10 },
+  log: { out: "charcoal", time: 12 },
+  birch_log: { out: "charcoal", time: 12 },
+  pine_log: { out: "charcoal", time: 12 }
+};
+var FUEL = {
+  coal: 80,
+  charcoal: 80,
+  log: 15,
+  birch_log: 15,
+  pine_log: 15,
+  planks: 15,
+  crafting_table: 15,
+  stick: 5,
+  sapling_oak: 5,
+  sapling_birch: 5,
+  sapling_pine: 5
+};
+function smeltRecipe(itemKey) {
+  return itemKey ? SMELTING[itemKey] || null : null;
+}
+function fuelTime(itemKey) {
+  return itemKey ? FUEL[itemKey] || 0 : 0;
+}
+var keyOf = (x, y, z) => `${x | 0},${y | 0},${z | 0}`;
+function emptyState() {
+  return { input: null, fuel: null, output: null, burn: 0, burnMax: 0, cook: 0 };
+}
+var copyStack = (s) => s ? { id: s.id, count: s.count } : null;
+var Furnaces = class {
+  constructor(game) {
+    this.game = game || null;
+    this.states = /* @__PURE__ */ new Map();
+    this._unsubs = [];
+  }
+  init() {
+    const ev = this.game && this.game.events;
+    if (ev) {
+      this._unsubs.push(ev.on("block:break", (e) => {
+        if (e && (e.blockId === ID.FURNACE || e.blockId === ID.FURNACE_LIT)) this.removeAt(e.x, e.y, e.z);
+      }));
+    }
+    return this;
+  }
+  reset() {
+    this.states.clear();
+  }
+  get(x, y, z) {
+    return this.states.get(keyOf(x, y, z)) || null;
+  }
+  // The state for a furnace, creating an empty one on first use.
+  ensure(x, y, z) {
+    const k = keyOf(x, y, z);
+    let st = this.states.get(k);
+    if (!st) {
+      st = emptyState();
+      this.states.set(k, st);
+    }
+    return st;
+  }
+  // Can this item go in the input / fuel slot right now?
+  canInput(st, itemKey) {
+    if (!smeltRecipe(itemKey)) return false;
+    return !st.input || st.input.id === itemKey;
+  }
+  canFuel(st, itemKey) {
+    if (!fuelTime(itemKey)) return false;
+    return !st.fuel || st.fuel.id === itemKey;
+  }
+  // Would the current input produce something that fits in the output slot?
+  _canSmelt(st) {
+    if (!st.input) return false;
+    const r = smeltRecipe(st.input.id);
+    if (!r) return false;
+    if (!st.output) return true;
+    return st.output.id === r.out && st.output.count < items_default.stackSize(r.out);
+  }
+  isBurning(st) {
+    return !!st && st.burn > 0;
+  }
+  // Advance one furnace by dt seconds.
+  tickState(st, dt) {
+    const wasBurning = st.burn > 0;
+    let canSmelt = this._canSmelt(st);
+    if (st.burn <= 0 && canSmelt && st.fuel) {
+      const t = fuelTime(st.fuel.id);
+      if (t > 0) {
+        st.burn = st.burnMax = t;
+        st.fuel.count -= 1;
+        if (st.fuel.count <= 0) st.fuel = null;
+      }
+    }
+    if (st.burn > 0) {
+      const used = Math.min(dt, st.burn);
+      st.burn -= used;
+      if (canSmelt) {
+        st.cook += used;
+        const r = smeltRecipe(st.input.id);
+        if (st.cook >= r.time) {
+          st.cook = 0;
+          st.input.count -= 1;
+          if (st.input.count <= 0) st.input = null;
+          if (st.output) st.output.count += 1;
+          else st.output = { id: r.out, count: 1 };
+          canSmelt = this._canSmelt(st);
+        }
+      }
+      if (st.burn <= 0) st.burn = 0;
+    }
+    if (!canSmelt) st.cook = 0;
+    else if (st.burn <= 0) st.cook = Math.max(0, st.cook - dt * 2);
+    return wasBurning !== st.burn > 0;
+  }
+  update(dt) {
+    if (!this.states.size) return;
+    const world = this.game && this.game.world;
+    for (const [k, st] of this.states) {
+      this.tickState(st, dt);
+      if (!world) continue;
+      const [x, y, z] = k.split(",").map(Number);
+      const cur = world.getBlock(x, y, z);
+      if (cur !== ID.FURNACE && cur !== ID.FURNACE_LIT) continue;
+      const want = st.burn > 0 ? ID.FURNACE_LIT : ID.FURNACE;
+      if (cur !== want) world.setBlock(x, y, z, want, { cause: "network" });
+    }
+  }
+  // A furnace block is gone: hand its contents back to the world.
+  removeAt(x, y, z) {
+    const k = keyOf(x, y, z);
+    const st = this.states.get(k);
+    if (!st) return;
+    this.states.delete(k);
+    const ents = this.game && this.game.entities;
+    if (ents && typeof ents.dropItem === "function") {
+      for (const s of [st.input, st.fuel, st.output]) {
+        if (s && s.count > 0) {
+          try {
+            ents.dropItem(x + 0.5, y + 0.5, z + 0.5, s.id, s.count);
+          } catch (_) {
+          }
+        }
+      }
+    }
+  }
+  /* ---- persistence ------------------------------------------------------ */
+  serialize() {
+    const out = [];
+    for (const [k, st] of this.states) {
+      if (!st.input && !st.fuel && !st.output && st.burn <= 0) continue;
+      out.push({
+        k,
+        input: copyStack(st.input),
+        fuel: copyStack(st.fuel),
+        output: copyStack(st.output),
+        burn: st.burn,
+        burnMax: st.burnMax,
+        cook: st.cook
+      });
+    }
+    return out;
+  }
+  load(arr) {
+    this.states.clear();
+    if (!Array.isArray(arr)) return;
+    const okStack = (s) => s && typeof s.id === "string" && items_default.has(s.id) && s.count > 0 ? { id: s.id, count: Math.floor(s.count) } : null;
+    for (const e of arr) {
+      if (!e || typeof e.k !== "string") continue;
+      this.states.set(e.k, {
+        input: okStack(e.input),
+        fuel: okStack(e.fuel),
+        output: okStack(e.output),
+        burn: Math.max(0, +e.burn || 0),
+        burnMax: Math.max(0, +e.burnMax || 0),
+        cook: Math.max(0, +e.cook || 0)
+      });
+    }
+  }
+};
 
 // js/fx/particles.js
 var MAX_PARTICLES = 2e3;
@@ -40774,6 +41479,7 @@ var BLOCK_TEXTURES = {
   pumpkin: { top: "pumpkin_top", side: "pumpkin_side", bottom: "pumpkin_top" },
   crafting_table: { top: "crafting_table_top", side: "crafting_table_side", bottom: "planks" },
   furnace: { top: "furnace_top", side: "furnace_side", bottom: "furnace_top" },
+  furnace_lit: { top: "furnace_top", side: "furnace_lit_side", bottom: "furnace_top" },
   bricks: "bricks",
   mossy_cobble: "mossy_cobble",
   clay: "clay",
@@ -41208,9 +41914,9 @@ var RECIPES = {
     for (let i = 2; i < s / 2; i++) t.set(i, i, 255, 255, 255, 130);
     for (let i = 2; i < s / 3; i++) t.set(i + 2, i, 255, 255, 255, 70);
   },
-  leaves: (t) => makeLeaves(t, baseColor("leaves", [64, 124, 56])),
-  birch_leaves: (t) => makeLeaves(t, baseColor("birch_leaves", [120, 158, 86])),
-  pine_leaves: (t) => makeLeaves(t, baseColor("pine_leaves", [40, 92, 64])),
+  leaves: (t) => makeLeaves(t, baseColor("leaves", [84, 152, 52])),
+  birch_leaves: (t) => makeLeaves(t, baseColor("birch_leaves", [132, 178, 88])),
+  pine_leaves: (t) => makeLeaves(t, baseColor("pine_leaves", [54, 116, 76])),
   glowstone: (t) => {
     const c = baseColor("glowstone", [238, 214, 120]);
     t.mottle([c[0] * 0.72, c[1] * 0.66, c[2] * 0.44], 0.12);
@@ -41293,6 +41999,21 @@ var RECIPES = {
     }
     for (let x = 4; x < s - 4; x++) t.set(x, s - 3, 196, 108, 40);
   },
+  // The burning furnace: same body, but the opening is full of fire.
+  furnace_lit_side: (t) => {
+    t.mottle(baseColor("cobblestone"), 0.09);
+    const s = t.size;
+    for (let y = s * 0.35 | 0; y < s - 2; y++) {
+      for (let x = 3; x < s - 3; x++) t.set(x, y, 58, 26, 14);
+    }
+    for (let x = 4; x < s - 4; x++) {
+      const h = 3 + (t.rand() * 5 | 0);
+      for (let k = 0; k < h; k++) {
+        const y = s - 3 - k, f = k / h;
+        t.set(x, y, 255, 214 - f * 120, 70 - f * 40);
+      }
+    }
+  },
   flower_red: (t) => makeFlower(t, [198, 62, 58]),
   flower_yellow: (t) => makeFlower(t, [226, 200, 62]),
   mushroom_red: (t) => {
@@ -41349,7 +42070,12 @@ function makeRings(t, c) {
   }
 }
 function makeLeaves(t, c) {
-  t.mottle(c, 0.2);
+  t.mottle(c, 0.28);
+  for (let i = 0; i < t.size * t.size * 0.16; i++) {
+    const x = t.rand() * t.size | 0, y = t.rand() * t.size | 0;
+    const p = t.get(x, y);
+    if (p[3] > 0) t.set(x, y, clamp255(p[0] * 1.32 + 8), clamp255(p[1] * 1.28 + 8), clamp255(p[2] * 1.2), p[3]);
+  }
   const s = t.size;
   for (let y = 0; y < s; y++) {
     for (let x = 0; x < s; x++) {
@@ -41512,6 +42238,7 @@ var PACK_ALIASES = {
   crafting_table_side: ["crafting_table_side", "crafting_table_front"],
   furnace_top: ["furnace_top"],
   furnace_side: ["furnace_front", "furnace_side"],
+  furnace_lit_side: ["furnace_front_on"],
   bricks: ["bricks", "brick"],
   mossy_cobble: ["mossy_cobblestone", "cobblestone_mossy"],
   clay: ["clay"],
@@ -42481,7 +43208,7 @@ var RemotePlayerRig = class {
   /**
    * @param {object} r   interpolated render state from NetClient
    * @param {number} dt  seconds
-   * @param {number} sky 0..1 skylight at the player, already scaled by daylight
+   * @param {number} sky 0..1 skylight at the player (occlusion only; time of day comes from the scene lights)
    * @param {number} blk 0..1 blocklight at the player
    */
   update(r, dt, sky, blk) {
@@ -42612,7 +43339,6 @@ var RemotePlayers = class {
       }
       return;
     }
-    const daylight = world && world.uniforms ? world.uniforms.uDaylight.value : 1;
     for (const p of this.net.players.values()) {
       if (!p.render.valid) continue;
       let rig = this.rigs.get(p.id);
@@ -42628,7 +43354,7 @@ var RemotePlayers = class {
           Math.floor(p.render.y + 1.5),
           Math.floor(p.render.z)
         );
-        sky = (packed >> 4 & 15) / 15 * daylight;
+        sky = (packed >> 4 & 15) / 15;
         blk = (packed & 15) / 15;
       }
       rig.update(p.render, dt, sky, blk);
@@ -42656,6 +43382,17 @@ var KEYS = [
   { t: 0.8, top: [0.08, 0.08, 0.22], horizon: [0.22, 0.12, 0.2], sun: [0.55, 0.4, 0.48], sunI: 0.1, hemiSky: [0.18, 0.14, 0.24], hemiGround: [0.06, 0.06, 0.08], hemiI: 0.3, light: 0.12 },
   { t: 1, top: [0.02, 0.03, 0.1], horizon: [0.05, 0.06, 0.14], sun: [0.3, 0.36, 0.62], sunI: 0.04, hemiSky: [0.06, 0.08, 0.18], hemiGround: [0.02, 0.03, 0.05], hemiI: 0.18, light: 0.04 }
 ];
+var CLOUD_GRID = 64;
+var CLOUD_CELL = 14;
+var CLOUD_THICK = 5;
+var CLOUD_HEIGHT = 112;
+var CLOUD_DRIFT = 2.4;
+var lin = (v) => Math.pow(v < 0 ? 0 : v, 2.2);
+var ENTITY_GAIN = 0.55;
+var BASE_EXPOSURE = 1.15;
+var NIGHT_AMBIENT_SKY = [0.01, 0.016, 0.04];
+var NIGHT_AMBIENT_GROUND = [4e-3, 6e-3, 0.014];
+var NIGHT_MOONLIGHT = [0.02, 0.03, 0.062];
 var SAMPLE = {
   top: [0, 0, 0],
   horizon: [0, 0, 0],
@@ -42690,6 +43427,12 @@ var Sky = class {
     this._lightLevel = 1;
     this._terrainTint = [1, 1, 1];
     this._terrainDaylight = 1;
+    this._ambSky = [0.3, 0.4, 0.6];
+    this._ambGround = [0.1, 0.1, 0.1];
+    this._sunLight = [1, 1, 1];
+    this._sunOnly = [1, 1, 1];
+    this._horizonLin = [0.4, 0.6, 1];
+    this._zenithLin = [0.1, 0.3, 0.8];
     this._elapsed = 0;
     this._initialized = false;
   }
@@ -42846,45 +43589,86 @@ var Sky = class {
   _buildClouds() {
     this.cloudGroup = new Group();
     this.cloudGroup.frustumCulled = false;
-    const baseY = Math.max(WATER_LEVEL + 90, 130);
+    const N = CLOUD_GRID, CELL = CLOUD_CELL, H = CLOUD_THICK;
+    let seed = 1374496523 >>> 0;
+    const rnd = () => {
+      seed ^= seed << 13;
+      seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5;
+      seed >>>= 0;
+      return seed / 4294967296;
+    };
+    const octaves = [[6, 0.55], [12, 0.3], [24, 0.15]].map(([size, weight]) => {
+      const lat = new Float32Array(size * size);
+      for (let i = 0; i < lat.length; i++) lat[i] = rnd();
+      return { size, weight, lat };
+    });
+    const sample2 = (x, z) => {
+      let v = 0;
+      for (const o of octaves) {
+        const fx = x / N * o.size, fz = z / N * o.size;
+        const x0 = Math.floor(fx), z0 = Math.floor(fz);
+        const tx = fx - x0, tz = fz - z0;
+        const sx = tx * tx * (3 - 2 * tx), sz = tz * tz * (3 - 2 * tz);
+        const at2 = (i, j) => o.lat[(j % o.size + o.size) % o.size * o.size + (i % o.size + o.size) % o.size];
+        const top = at2(x0, z0) + (at2(x0 + 1, z0) - at2(x0, z0)) * sx;
+        const bot = at2(x0, z0 + 1) + (at2(x0 + 1, z0 + 1) - at2(x0, z0 + 1)) * sx;
+        v += (top + (bot - top) * sz) * o.weight;
+      }
+      return v;
+    };
+    const filled = new Uint8Array(N * N);
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) filled[z * N + x] = sample2(x, z) > 0.605 ? 1 : 0;
+    const at = (x, z) => filled[(z % N + N) % N * N + (x % N + N) % N];
+    const pos = [], col = [], idx = [];
+    const quad = (a, b2, c, d, shade2) => {
+      const base = pos.length / 3;
+      for (const v of [a, b2, c, d]) {
+        pos.push(v[0], v[1], v[2]);
+        col.push(shade2, shade2, shade2);
+      }
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    for (let z = 0; z < N; z++) {
+      for (let x = 0; x < N; x++) {
+        if (!at(x, z)) continue;
+        const x0 = x * CELL, x1 = x0 + CELL, z0 = z * CELL, z1 = z0 + CELL;
+        quad([x0, H, z1], [x1, H, z1], [x1, H, z0], [x0, H, z0], 1);
+        quad([x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1], 0.8);
+        if (!at(x + 1, z)) quad([x1, 0, z1], [x1, 0, z0], [x1, H, z0], [x1, H, z1], 0.82);
+        if (!at(x - 1, z)) quad([x0, 0, z0], [x0, 0, z1], [x0, H, z1], [x0, H, z0], 0.82);
+        if (!at(x, z + 1)) quad([x0, 0, z1], [x1, 0, z1], [x1, H, z1], [x0, H, z1], 0.9);
+        if (!at(x, z - 1)) quad([x1, 0, z0], [x0, 0, z0], [x0, H, z0], [x1, H, z0], 0.9);
+      }
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute("color", new BufferAttribute(new Float32Array(col), 3));
+    geo.setIndex(new BufferAttribute(new Uint32Array(idx), 1));
     const mat = new MeshBasicMaterial({
       color: 16777215,
+      vertexColors: true,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.85,
       depthWrite: false,
       depthTest: true,
       // a hill in front of a cloud must hide it
-      fog: true,
+      fog: true
       // clouds DO catch fog so they fade with distance
-      side: DoubleSide
     });
     this.cloudMat = mat;
-    let s = 305441741 >>> 0;
-    const rnd = () => {
-      s ^= s << 13;
-      s >>>= 0;
-      s ^= s >> 17;
-      s ^= s << 5;
-      s >>>= 0;
-      return (s >>> 0) / 4294967296;
-    };
-    const COUNT = 14;
-    for (let i = 0; i < COUNT; i++) {
-      const w = 60 + rnd() * 120;
-      const d = 50 + rnd() * 110;
-      const geo = new PlaneGeometry(w, d, 1, 1);
-      const mesh = new Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(
-        (rnd() - 0.5) * 900,
-        baseY + (rnd() - 0.5) * 40,
-        (rnd() - 0.5) * 900
-      );
-      mesh.frustumCulled = false;
-      mesh.userData.drift = 2 + rnd() * 4;
-      this.cloudGroup.add(mesh);
-      this.clouds.push(mesh);
+    const span = N * CELL;
+    for (let tz = -1; tz <= 1; tz++) {
+      for (let tx = -1; tx <= 1; tx++) {
+        const mesh = new Mesh(geo, mat);
+        mesh.position.set(tx * span, 0, tz * span);
+        mesh.frustumCulled = false;
+        this.cloudGroup.add(mesh);
+        this.clouds.push(mesh);
+      }
     }
+    this._cloudDrift = 0;
     this.group.add(this.cloudGroup);
   }
   _buildLights(scene) {
@@ -43025,26 +43809,36 @@ var Sky = class {
     this._terrainTint[1] = lerp2(moonlit[1], p.sun[1], day);
     this._terrainTint[2] = lerp2(moonlit[2], p.sun[2], day);
     this._terrainDaylight = 0.16 + 0.84 * day;
+    const night = clamp01(smoothstep2(0.4, 0.04, day));
+    for (let i = 0; i < 3; i++) {
+      this._ambSky[i] = lin(p.hemiSky[i]) * p.hemiI * 0.8 + NIGHT_AMBIENT_SKY[i] * night;
+      this._ambGround[i] = lin(p.hemiGround[i]) * p.hemiI * 0.85 + NIGHT_AMBIENT_GROUND[i] * night;
+      this._sunOnly[i] = lin(p.sun[i]) * p.sunI * 1.2;
+      this._sunLight[i] = this._sunOnly[i] + NIGHT_MOONLIGHT[i] * night;
+      this._horizonLin[i] = lin(p.horizon[i]);
+      this._zenithLin[i] = lin(p.top[i]);
+    }
     if (this.hemi) {
-      setColor(this.hemi.color, p.hemiSky);
-      setColor(this.hemi.groundColor, p.hemiGround);
-      this.hemi.intensity = p.hemiI;
+      this.hemi.color.setRGB(this._ambSky[0], this._ambSky[1], this._ambSky[2]);
+      this.hemi.groundColor.setRGB(this._ambGround[0], this._ambGround[1], this._ambGround[2]);
+      this.hemi.intensity = Math.PI * ENTITY_GAIN * this._brightness();
     }
     if (this.sun) {
       const sunAngle = (t - 0.25) * TAU;
       const sx = Math.cos(sunAngle);
       const sy = Math.sin(sunAngle);
       this.sun.position.set(sx, Math.max(sy, -0.2), 0.35).multiplyScalar(100);
-      setColor(this.sun.color, p.sun);
-      this.sun.intensity = clamp2(p.sunI, 0, 2);
+      const up = clamp01(smoothstep2(-0.05, 0.12, sy));
+      this.sun.color.setRGB(this._sunOnly[0], this._sunOnly[1], this._sunOnly[2]);
+      this.sun.intensity = Math.PI * ENTITY_GAIN * this._brightness() * up;
     }
     if (this.moon) {
       const moonAngle = (t - 0.25) * TAU + Math.PI;
       const mx = Math.cos(moonAngle);
       const my = Math.sin(moonAngle);
       this.moon.position.set(mx, Math.max(my, -0.2), -0.35).multiplyScalar(100);
-      const nightFactor = clamp01(smoothstep2(0.18, 0.02, p.light));
-      this.moon.intensity = 0.22 * nightFactor;
+      this.moon.color.setRGB(NIGHT_MOONLIGHT[0] * 6, NIGHT_MOONLIGHT[1] * 6, NIGHT_MOONLIGHT[2] * 6);
+      this.moon.intensity = Math.PI * ENTITY_GAIN * this._brightness() * night * clamp01(smoothstep2(-0.05, 0.12, my));
     }
   }
   _updateFog(p) {
@@ -43054,8 +43848,11 @@ var Sky = class {
       _tmpColor.setRGB(p.horizon[0], p.horizon[1], p.horizon[2]);
       engine.setFogColor(_tmpColor);
       if (typeof engine.setFogRange === "function") {
-        let near = lerp2(28, 44, p.light);
-        let far = lerp2(150, 260, p.light);
+        const st = this.game && this.game.state && this.game.state.settings;
+        const rd = st && typeof st.renderDistance === "number" ? Math.max(2, Math.min(12, st.renderDistance)) : 6;
+        const reach = rd * CHUNK_SX * 0.94;
+        let far = reach * lerp2(0.82, 1, p.light);
+        let near = far * lerp2(0.34, 0.42, p.light);
         const weather = this.game && this.game.weather;
         const wet = weather ? weather.intensity : 0;
         near *= 1 - 0.35 * wet;
@@ -43075,19 +43872,23 @@ var Sky = class {
     if (this.stars) this.stars.visible = this.starMat.opacity > 0.01;
   }
   _updateClouds(dt, cam) {
-    if (!this.clouds.length) return;
-    const WRAP = 1e3;
-    for (let i = 0; i < this.clouds.length; i++) {
-      const c = this.clouds[i];
-      c.position.x += c.userData.drift * dt;
-      if (c.position.x > WRAP * 0.5) c.position.x -= WRAP;
-    }
+    if (!this.clouds.length || !this.cloudGroup) return;
+    const span = CLOUD_GRID * CLOUD_CELL;
+    this._cloudDrift = ((this._cloudDrift || 0) + CLOUD_DRIFT * dt) % span;
+    const cx = cam ? cam.position.x : 0, cy = cam ? cam.position.y : 0, cz = cam ? cam.position.z : 0;
+    const wrap = (v) => v - Math.floor(v / span + 0.5) * span;
+    this.cloudGroup.position.set(
+      wrap(this._cloudDrift - cx) - span / 2,
+      CLOUD_HEIGHT - cy,
+      wrap(-cz) - span / 2
+    );
     if (this.cloudMat) {
       const lvl = this._lightLevel;
-      const g = lerp2(0.45, 1, lvl);
-      this.cloudMat.color.setRGB(g, g, g * 1);
-      this.cloudMat.opacity = lerp2(0.18, 0.6, lvl);
-      this.cloudMat.visible = this.cloudMat.opacity > 0.02;
+      const k = lerp2(0.16, 1, clamp01(lvl * 1.15));
+      const warm = SAMPLE.sun;
+      this.cloudMat.color.setRGB(k * lerp2(0.8, warm[0], 0.65), k * lerp2(0.84, warm[1], 0.65), k * lerp2(0.95, warm[2], 0.65));
+      this.cloudMat.opacity = lerp2(0.35, 0.86, clamp01(lvl * 1.5));
+      this.cloudMat.visible = true;
     }
   }
   /* ----------------------------------------------------------------------
@@ -43115,11 +43916,19 @@ var Sky = class {
     const s = this._sunDirScratch || (this._sunDirScratch = new Vector3(0, 1, 0));
     this.getSunDirection(s);
     if (s.y < 0) s.multiplyScalar(-1);
+    s.z += 0.32;
+    s.normalize();
     return {
       daylight: this._terrainDaylight,
       skyTint: this._terrainTint,
       time: this._elapsed || 0,
-      sunDir: s
+      sunDir: s,
+      ambSky: this._ambSky,
+      ambGround: this._ambGround,
+      sunLight: this._sunLight,
+      horizon: this._horizonLin,
+      zenith: this._zenithLin,
+      exposure: BASE_EXPOSURE * this._brightness()
     };
   }
   // Returns a unit Vector3 pointing from the world toward the sun (for shaders
@@ -43176,6 +43985,12 @@ var Sky = class {
     if (t >= 0.32 && t < 0.68) return "day";
     if (t >= 0.68 && t < 0.8) return "dusk";
     return "night";
+  }
+  // The player's brightness setting (1 = as designed).
+  _brightness() {
+    const s = this.game && this.game.state && this.game.state.settings;
+    const b = s && typeof s.brightness === "number" ? s.brightness : 1;
+    return b > 0.3 && b < 3 ? b : 1;
   }
   _fancy() {
     const s = this.game && this.game.state && this.game.state.settings;
@@ -43484,14 +44299,25 @@ var HUD = class {
       if (ctx && dpr !== 1) ctx.scale(dpr, dpr);
       const key = this._el("span", { cls: "key", text: String(i + 1), parent: slotEl });
       const count = this._el("span", { cls: "count", parent: slotEl });
+      slotEl.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const inv = this.game && this.game.inventory;
+        if (inv && typeof inv.setSelected === "function") inv.setSelected(i);
+      });
+      const dur = this._el("div", { cls: "dur", parent: slotEl });
+      const durFill = document.createElement("i");
+      dur.appendChild(durFill);
       this.slots.push({
         el: slotEl,
         canvas,
         ctx,
         key,
         count,
+        dur,
+        durFill,
         lastId: void 0,
         lastCount: -1,
+        lastWear: -1,
         selected: false
       });
     }
@@ -43606,6 +44432,17 @@ var HUD = class {
       if (cnt !== slot.lastCount) {
         slot.count.textContent = cnt > 1 ? String(cnt) : "";
         slot.lastCount = cnt;
+      }
+      const wear = stack && stack.wear ? stack.wear : 0;
+      if (wear !== slot.lastWear) {
+        slot.lastWear = wear;
+        const f = items_default.wearFraction(stack);
+        if (f === null) slot.dur.style.display = "none";
+        else {
+          slot.dur.style.display = "block";
+          slot.durFill.style.width = (f * 100).toFixed(0) + "%";
+          slot.durFill.style.background = `hsl(${(f * 120).toFixed(0)}, 80%, 50%)`;
+        }
       }
     }
     this._refreshSelectedFromInventory();
@@ -43971,6 +44808,8 @@ var Menus = class {
     this.craftingTable = false;
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
+    this.furnacePos = null;
+    this._furnaceSig = "";
     this._invEls = null;
     this._onMouseMove = (e) => this._handlePointer(e);
     this._onInvChange = () => {
@@ -44012,6 +44851,7 @@ var Menus = class {
   // Optional per-frame hook (tooltip following, cursor ghost positioning are
   // event-driven, so this is a no-op but kept for the contract & future use).
   update(dt) {
+    if (this.invOpen && this.furnacePos) this._updateFurnacePanel();
   }
   /* =====================================================================
      Small DOM helpers
@@ -44259,6 +45099,7 @@ var Menus = class {
     panel.appendChild(this._make("p", { class: "subtitle", text: "Tune the experience. Changes apply instantly and are saved." }));
     panel.appendChild(this._make("h2", { text: "Display" }));
     panel.appendChild(this._slider("renderDistance", "Render Distance", 2, 12, 1, (v) => `${v} chunks`));
+    panel.appendChild(this._slider("brightness", "Brightness", 0.6, 1.6, 0.05, (v) => `${Math.round(v * 100)}%`));
     panel.appendChild(this._slider("fov", "Field of View", 50, 110, 1, (v) => `${v}\xB0`, (v) => {
       const g = this.game;
       if (g && g.engine && typeof g.engine.setFov === "function") g.engine.setFov(v);
@@ -44535,7 +45376,9 @@ var Menus = class {
       ["Drop item", "<kbd>Q</kbd>"],
       ["Inventory / Crafting", "<kbd>E</kbd>"],
       ["Pause", "<kbd>Esc</kbd>"],
-      ["Toggle debug overlay", "<kbd>F3</kbd>"]
+      ["Free the mouse (no pause)", "<kbd>U</kbd>, then click the game to capture it again"],
+      ["Toggle debug overlay", "<kbd>F3</kbd>"],
+      ["On a touch screen", "Left stick to move \xB7 drag to look \xB7 Mine / Place / Jump on the right \xB7 tap the hotbar to choose an item"]
     ];
     const table = this._make("table", { class: "controls-table" });
     for (const [action, keys] of rows) {
@@ -44551,8 +45394,9 @@ var Menus = class {
     [
       "Punch a tree, then craft planks and a crafting table.",
       "Place a crafting table and right-click it for the 3\xD73 grid.",
+      "Right-click a furnace to smelt: put ore (or raw meat, sand, clay) on top and coal, logs or planks underneath as fuel.",
       "Torches keep monsters away \u2014 light up your home before nightfall.",
-      "Better tools (stone, iron, diamond) mine faster and last longer."
+      "Better tools (stone, iron, diamond) mine faster and last longer \u2014 but every tool wears out; watch the bar under its icon."
     ].forEach((t) => tips.appendChild(this._make("li", { text: t })));
     panel.appendChild(tips);
     panel.appendChild(this._make("hr", { class: "sep" }));
@@ -44616,7 +45460,13 @@ var Menus = class {
       this._openInventory(!!forceCraftingTable);
     }
   }
-  _openInventory(forceCraftingTable) {
+  // Open the smelting screen for the furnace at (x, y, z).
+  openFurnace(x, y, z) {
+    if (this.invOpen) return;
+    if (this.game && this.game.furnaces) this.game.furnaces.ensure(x, y, z);
+    this._openInventory(false, { x, y, z });
+  }
+  _openInventory(forceCraftingTable, furnace) {
     if (!this.layer) return;
     const g = this.game;
     if (g && g.input && typeof g.input.exitLock === "function") g.input.exitLock();
@@ -44624,6 +45474,8 @@ var Menus = class {
     this.invOpen = true;
     this.current = "inventory";
     this.craftingTable = !!forceCraftingTable;
+    this.furnacePos = furnace || null;
+    this._furnaceSig = "";
     this.craftGrid = new Array(9).fill(null);
     this.cursor = null;
     if (g && g.state) g.state.flags.inventoryOpen = true;
@@ -44638,6 +45490,7 @@ var Menus = class {
     this._returnCursorToInventory();
     this.invOpen = false;
     this.current = null;
+    this.furnacePos = null;
     this._hideTooltip();
     this._hideGhost();
     this._closeInventoryDom();
@@ -44670,7 +45523,7 @@ var Menus = class {
     const panel = this._make("div", { class: "menu-panel" });
     const titleRow = this._make("div", { class: "row between" });
     titleRow.appendChild(this._make("h1", {
-      text: this.craftingTable ? "Crafting Table" : "Inventory",
+      text: this.furnacePos ? "Furnace" : this.craftingTable ? "Crafting Table" : "Inventory",
       style: "font-size:24px;"
     }));
     titleRow.appendChild(this._button("Close", {
@@ -44679,44 +45532,49 @@ var Menus = class {
       onClick: () => this._closeInventory()
     }));
     panel.appendChild(titleRow);
-    panel.appendChild(this._make("div", { class: "section-title", text: "CRAFTING" }));
-    const craftArea = this._make("div", { class: "craft-area" });
-    const gridSize = this.craftingTable ? 3 : 2;
-    const gridEl = this._make("div", { class: "craft-grid " + (this.craftingTable ? "g3" : "g2") });
-    const craftSlots = [];
-    const cellIndices = this.craftingTable ? [0, 1, 2, 3, 4, 5, 6, 7, 8] : [0, 1, 3, 4];
-    for (const idx of cellIndices) {
-      const slot = this._makeSlot();
-      slot.dataset.kind = "craft";
-      slot.dataset.cell = String(idx);
-      slot.addEventListener("click", (e) => this._onCraftSlotClick(idx, e));
-      slot.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        this._onCraftSlotClick(idx, e);
+    let craftSlots = [], outSlot = null, recipeSlots = [], furnaceEls = null;
+    if (this.furnacePos) {
+      furnaceEls = this._buildFurnaceArea(panel);
+    } else {
+      panel.appendChild(this._make("div", { class: "section-title", text: "CRAFTING" }));
+      const craftArea = this._make("div", { class: "craft-area" });
+      const gridSize = this.craftingTable ? 3 : 2;
+      const gridEl = this._make("div", { class: "craft-grid " + (this.craftingTable ? "g3" : "g2") });
+      craftSlots = [];
+      const cellIndices = this.craftingTable ? [0, 1, 2, 3, 4, 5, 6, 7, 8] : [0, 1, 3, 4];
+      for (const idx of cellIndices) {
+        const slot = this._makeSlot();
+        slot.dataset.kind = "craft";
+        slot.dataset.cell = String(idx);
+        slot.addEventListener("click", (e) => this._onCraftSlotClick(idx, e));
+        slot.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          this._onCraftSlotClick(idx, e);
+        });
+        slot.addEventListener("mouseenter", () => this._showTooltipFor(this.craftGrid[idx]));
+        slot.addEventListener("mouseleave", () => this._hideTooltip());
+        craftSlots.push({ idx, el: slot });
+        gridEl.appendChild(slot);
+      }
+      craftArea.appendChild(gridEl);
+      craftArea.appendChild(this._make("div", { class: "craft-arrow", text: "\u2192" }));
+      const outWrap = this._make("div", { class: "craft-out" });
+      outSlot = this._makeSlot();
+      outSlot.dataset.kind = "output";
+      outSlot.addEventListener("click", (e) => this._onOutputClick(e));
+      outSlot.addEventListener("mouseenter", () => {
+        const m = this._matchCraft();
+        this._showTooltipFor(m ? m.output.id : null);
       });
-      slot.addEventListener("mouseenter", () => this._showTooltipFor(this.craftGrid[idx]));
-      slot.addEventListener("mouseleave", () => this._hideTooltip());
-      craftSlots.push({ idx, el: slot });
-      gridEl.appendChild(slot);
+      outSlot.addEventListener("mouseleave", () => this._hideTooltip());
+      outWrap.appendChild(outSlot);
+      craftArea.appendChild(outWrap);
+      panel.appendChild(craftArea);
+      panel.appendChild(this._make("div", { class: "section-title", text: "RECIPE BOOK" }));
+      const book = this._make("div", { class: "recipe-book" });
+      recipeSlots = this._buildRecipeBook(book);
+      panel.appendChild(book);
     }
-    craftArea.appendChild(gridEl);
-    craftArea.appendChild(this._make("div", { class: "craft-arrow", text: "\u2192" }));
-    const outWrap = this._make("div", { class: "craft-out" });
-    const outSlot = this._makeSlot();
-    outSlot.dataset.kind = "output";
-    outSlot.addEventListener("click", (e) => this._onOutputClick(e));
-    outSlot.addEventListener("mouseenter", () => {
-      const m = this._matchCraft();
-      this._showTooltipFor(m ? m.output.id : null);
-    });
-    outSlot.addEventListener("mouseleave", () => this._hideTooltip());
-    outWrap.appendChild(outSlot);
-    craftArea.appendChild(outWrap);
-    panel.appendChild(craftArea);
-    panel.appendChild(this._make("div", { class: "section-title", text: "RECIPE BOOK" }));
-    const book = this._make("div", { class: "recipe-book" });
-    const recipeSlots = this._buildRecipeBook(book);
-    panel.appendChild(book);
     panel.appendChild(this._make("div", { class: "section-title", text: "INVENTORY" }));
     const mainGrid = this._make("div", { class: "inv-grid main" });
     const mainSlots = [];
@@ -44767,7 +45625,8 @@ var Menus = class {
       outSlot,
       mainSlots,
       hotSlots,
-      recipeSlots
+      recipeSlots,
+      furnaceEls
     };
   }
   // Build the recipe-book entries; returns [{recipe, el}] for refresh.
@@ -44793,10 +45652,14 @@ var Menus = class {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = ICON_SIZE2;
     const count = this._make("span", { class: "count" });
+    const dur = this._make("div", { class: "dur" });
+    dur.appendChild(document.createElement("i"));
     slot.appendChild(canvas);
     slot.appendChild(count);
+    slot.appendChild(dur);
     slot._canvas = canvas;
     slot._count = count;
+    slot._dur = dur;
     return slot;
   }
   // Draw a stack ({id,count}|null) into a slot element.
@@ -44814,6 +45677,16 @@ var Menus = class {
     } else {
       slotEl._count.textContent = "";
     }
+    if (slotEl._dur) {
+      const f = items_default.wearFraction(stack);
+      if (f === null) slotEl._dur.style.display = "none";
+      else {
+        slotEl._dur.style.display = "block";
+        const bar = slotEl._dur.firstChild;
+        bar.style.width = (f * 100).toFixed(0) + "%";
+        bar.style.background = `hsl(${(f * 120).toFixed(0)}, 80%, 50%)`;
+      }
+    }
   }
   /* ---- inventory refresh (redraw all live slots) ----------------------- */
   _refreshInventory() {
@@ -44826,12 +45699,16 @@ var Menus = class {
       const key = this.craftGrid[idx];
       this._drawStack(el, key ? { id: key, count: 1 } : null);
     }
-    const match = this._matchCraft();
-    this._drawStack(this._invEls.outSlot, match ? { id: match.output.id, count: match.output.count } : null);
+    if (this._invEls.furnaceEls) this._furnaceSig = "";
+    if (this._invEls.furnaceEls) this._updateFurnacePanel();
+    if (this._invEls.outSlot) {
+      const match = this._matchCraft();
+      this._drawStack(this._invEls.outSlot, match ? { id: match.output.id, count: match.output.count } : null);
+    }
     const crafting = this.game && this.game.crafting;
     for (const { entry, el } of this._invEls.recipeSlots) {
-      const sample = entry.output ? entry.output.id : null;
-      this._drawStack(el, sample ? { id: sample, count: entry.output.count } : null);
+      const sample2 = entry.output ? entry.output.id : null;
+      this._drawStack(el, sample2 ? { id: sample2, count: entry.output.count } : null);
       const can = crafting && typeof crafting.canCraft === "function" ? crafting.canCraft(entry.recipe || entry, inv) : true;
       el.style.opacity = can ? "1" : "0.4";
     }
@@ -44841,6 +45718,136 @@ var Menus = class {
     const crafting = this.game && this.game.crafting;
     if (!crafting || typeof crafting.match !== "function") return null;
     return crafting.match(this.craftGrid.slice());
+  }
+  /* ---- the furnace screen ---------------------------------------------- */
+  // Build the smelting row: [ore] -> [output], with the fuel slot and flame
+  // beneath the ore. Returns the live elements the per-frame update drives.
+  _buildFurnaceArea(panel) {
+    panel.appendChild(this._make("div", { class: "section-title", text: "SMELTING" }));
+    const area2 = this._make("div", { class: "furnace-area" });
+    const left = this._make("div", { class: "furnace-col" });
+    const input = this._makeSlot();
+    const flame = this._make("div", { class: "flame" });
+    const flameFill = this._make("i");
+    flame.appendChild(flameFill);
+    const fuel = this._make("div", { class: "fuel-label", text: "Fuel" });
+    const fuelSlot = this._makeSlot();
+    left.appendChild(input);
+    left.appendChild(flame);
+    left.appendChild(fuelSlot);
+    left.appendChild(fuel);
+    area2.appendChild(left);
+    const arrow = this._make("div", { class: "progress" });
+    const arrowFill = this._make("i");
+    arrow.appendChild(arrowFill);
+    area2.appendChild(arrow);
+    const outWrap = this._make("div", { class: "craft-out" });
+    const output = this._makeSlot();
+    outWrap.appendChild(output);
+    area2.appendChild(outWrap);
+    panel.appendChild(area2);
+    panel.appendChild(this._make("div", {
+      class: "furnace-hint",
+      text: "Ore, raw meat, sand, clay and logs cook with fuel: coal, charcoal, logs, planks or sticks."
+    }));
+    const wire = (which, el) => {
+      el.dataset.kind = "furnace-" + which;
+      el.addEventListener("click", (e) => this._onFurnaceSlotClick(which, e));
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this._onFurnaceSlotClick(which, e);
+      });
+      el.addEventListener("mouseenter", () => {
+        const st = this._furnaceState();
+        const stack = st ? st[which] : null;
+        this._showTooltipFor(stack ? stack.id : null);
+      });
+      el.addEventListener("mouseleave", () => this._hideTooltip());
+    };
+    wire("input", input);
+    wire("fuel", fuelSlot);
+    wire("output", output);
+    return { input, fuel: fuelSlot, output, flameFill, arrowFill };
+  }
+  _furnaceState() {
+    const f = this.game && this.game.furnaces, p = this.furnacePos;
+    return f && p ? f.ensure(p.x, p.y, p.z) : null;
+  }
+  // Redraw the furnace slots when their contents change, and move the flame
+  // and progress bars every call.
+  _updateFurnacePanel() {
+    const els = this._invEls && this._invEls.furnaceEls;
+    const st = this._furnaceState();
+    if (!els || !st) return;
+    const stackSig = (s) => s ? s.id + ":" + s.count : "-";
+    const sig = stackSig(st.input) + "|" + stackSig(st.fuel) + "|" + stackSig(st.output);
+    if (sig !== this._furnaceSig) {
+      this._furnaceSig = sig;
+      this._drawStack(els.input, st.input);
+      this._drawStack(els.fuel, st.fuel);
+      this._drawStack(els.output, st.output);
+    }
+    const flame = st.burnMax > 0 ? st.burn / st.burnMax : 0;
+    els.flameFill.style.height = (Math.max(0, Math.min(1, flame)) * 100).toFixed(1) + "%";
+    const r = st.input ? smeltRecipe(st.input.id) : null;
+    const prog = r ? st.cook / r.time : 0;
+    els.arrowFill.style.width = (Math.max(0, Math.min(1, prog)) * 100).toFixed(1) + "%";
+    const g = this.game, p = this.furnacePos;
+    if (g && g.world && p) {
+      const id = g.world.getBlock(p.x, p.y, p.z);
+      if (id !== ID.FURNACE && id !== ID.FURNACE_LIT) this._closeInventory();
+    }
+  }
+  // Click one of the three furnace slots, using the same cursor-stack model as
+  // the inventory. Input and fuel only accept valid items; output is take-only.
+  _onFurnaceSlotClick(which, e) {
+    const st = this._furnaceState();
+    if (!st) return;
+    const right = !!(e && e.button === 2);
+    const here = st[which];
+    const cur = this.cursor;
+    const accepts = (id) => which === "input" ? !!smeltRecipe(id) : which === "fuel" ? fuelTime(id) > 0 : false;
+    if (which === "output") {
+      if (!here) return;
+      if (!cur) {
+        const n = right ? Math.ceil(here.count / 2) : here.count;
+        this.cursor = { id: here.id, count: n };
+        here.count -= n;
+      } else if (cur.id === here.id) {
+        const room = items_default.stackSize(cur.id) - cur.count;
+        const n = Math.min(room, here.count);
+        cur.count += n;
+        here.count -= n;
+      } else return;
+      if (here.count <= 0) st.output = null;
+    } else if (!cur) {
+      if (!here) return;
+      const n = right ? Math.ceil(here.count / 2) : here.count;
+      this.cursor = { id: here.id, count: n };
+      here.count -= n;
+      if (here.count <= 0) st[which] = null;
+    } else {
+      if (!accepts(cur.id)) {
+        this._emit("toast", { text: which === "fuel" ? "That will not burn" : "That cannot be smelted", kind: "warn" });
+        return;
+      }
+      if (!here) {
+        const n = right ? 1 : cur.count;
+        st[which] = { id: cur.id, count: n };
+        cur.count -= n;
+        if (cur.count <= 0) this.cursor = null;
+      } else if (here.id === cur.id) {
+        const room = items_default.stackSize(here.id) - here.count;
+        const n = Math.min(room, right ? 1 : cur.count);
+        here.count += n;
+        cur.count -= n;
+        if (cur.count <= 0) this.cursor = null;
+      } else {
+        st[which] = { id: cur.id, count: cur.count };
+        this.cursor = { id: here.id, count: here.count };
+      }
+    }
+    this._afterSlotMutation();
   }
   /* ---- slot interactions (click pickup / place via the cursor) --------- */
   // Click an inventory storage/hotbar slot: classic pick-up / put-down with a
@@ -44855,21 +45862,21 @@ var Menus = class {
       if (!here) return;
       if (e && e.button === 2) {
         const half = Math.ceil(here.count / 2);
-        this.cursor = { id: here.id, count: half };
+        this.cursor = cloneStack(here, half);
         here.count -= half;
         if (here.count <= 0) slots[slotIndex] = null;
       } else {
-        this.cursor = { id: here.id, count: here.count };
+        this.cursor = cloneStack(here);
         slots[slotIndex] = null;
       }
     } else {
       if (!here) {
         if (e && e.button === 2) {
-          slots[slotIndex] = { id: cur.id, count: 1 };
+          slots[slotIndex] = cloneStack(cur, 1);
           cur.count -= 1;
           if (cur.count <= 0) this.cursor = null;
         } else {
-          slots[slotIndex] = { id: cur.id, count: cur.count };
+          slots[slotIndex] = cloneStack(cur);
           this.cursor = null;
         }
       } else if (here.id === cur.id) {
@@ -44888,8 +45895,8 @@ var Menus = class {
           if (cur.count <= 0) this.cursor = null;
         }
       } else {
-        slots[slotIndex] = { id: cur.id, count: cur.count };
-        this.cursor = { id: here.id, count: here.count };
+        slots[slotIndex] = cloneStack(cur);
+        this.cursor = cloneStack(here);
       }
     }
     this._afterSlotMutation();
@@ -44981,7 +45988,13 @@ var Menus = class {
   }
   _returnCursorToInventory() {
     if (!this.cursor) return;
-    this._returnKeyToInventory(this.cursor.id, this.cursor.count);
+    const inv = this.game && this.game.inventory;
+    if (inv && typeof inv.addStack === "function") {
+      const left = inv.addStack(this.cursor);
+      if (left > 0) this._spillToWorld(this.cursor.id, left);
+    } else {
+      this._returnKeyToInventory(this.cursor.id, this.cursor.count);
+    }
     this.cursor = null;
     this._hideGhost();
   }
@@ -45138,11 +46151,219 @@ function prettyKeyName(code) {
   return NAMES[code] || code;
 }
 
+// js/ui/touch.js
+var STICK_RADIUS = 52;
+var STICK_DEAD = 0.12;
+var SPRINT_AT = 0.92;
+function touchControlsWanted() {
+  if (typeof window === "undefined" || !isTouchDevice()) return false;
+  if (typeof matchMedia === "function") {
+    if (matchMedia("(pointer: fine)").matches && !matchMedia("(pointer: coarse)").matches) return false;
+  }
+  return true;
+}
+var TouchControls = class {
+  constructor(game) {
+    this.game = game;
+    this.root = null;
+    this.enabled = false;
+    this.visible = false;
+    this.el = {};
+    this._stickId = null;
+    this._lookId = null;
+    this._lookX = 0;
+    this._lookY = 0;
+    this._btn = /* @__PURE__ */ new Map();
+  }
+  init() {
+    const forced = typeof location !== "undefined" && /[?&]touch=1\b/.test(location.search);
+    const off = typeof location !== "undefined" && /[?&]touch=0\b/.test(location.search);
+    this.enabled = !off && (forced || touchControlsWanted());
+    if (!this.enabled) return;
+    document.body.classList.add("touch");
+    this._build();
+  }
+  /* ---- DOM ------------------------------------------------------------- */
+  _mk(tag, attrs, parent) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "text") e.textContent = v;
+      else e.setAttribute(k, v);
+    }
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  _build() {
+    const layer = document.getElementById("hud-layer") || document.body;
+    const root = this._mk("div", { id: "touch-controls" }, layer);
+    this.root = root;
+    root.addEventListener("contextmenu", (e) => e.preventDefault());
+    const look = this._mk("div", { id: "touch-look" }, root);
+    this.el.look = look;
+    const opts = { passive: false };
+    look.addEventListener("touchstart", (e) => this._lookDown(e), opts);
+    look.addEventListener("touchmove", (e) => this._lookMove(e), opts);
+    look.addEventListener("touchend", (e) => this._lookUp(e), opts);
+    look.addEventListener("touchcancel", (e) => this._lookUp(e), opts);
+    const stick = this._mk("div", { id: "touch-stick", class: "touch-stick" }, root);
+    const nub = this._mk("div", { class: "nub" }, stick);
+    this.el.stick = stick;
+    this.el.nub = nub;
+    stick.addEventListener("touchstart", (e) => this._stickDown(e), opts);
+    stick.addEventListener("touchmove", (e) => this._stickMove(e), opts);
+    stick.addEventListener("touchend", (e) => this._stickUp(e), opts);
+    stick.addEventListener("touchcancel", (e) => this._stickUp(e), opts);
+    const input = this.game.input;
+    this._holdButton("touch-break", "Mine", (d) => input.touchButton(0, d));
+    this._holdButton("touch-place", "Place", (d) => input.touchButton(2, d));
+    this._holdButton("touch-jump", "Jump", (d) => input.touchAction("jump", d));
+    const sneak = this._mk("button", { id: "touch-sneak", class: "touch-btn small", text: "Sneak" }, root);
+    sneak.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const on = !input.touch.held.has("sneak");
+      input.touchAction("sneak", on);
+      sneak.classList.toggle("on", on);
+    });
+    this.el.sneak = sneak;
+    const fly = this._mk("button", { id: "touch-fly", class: "touch-btn small", text: "Fly" }, root);
+    fly.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      input.touchPulse("fly");
+    });
+    this.el.fly = fly;
+    const inv = this._mk("button", { id: "touch-inv", class: "touch-btn top", text: "Bag" }, root);
+    inv.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.game.menus.toggleInventory();
+    });
+    const pause = this._mk("button", { id: "touch-pause", class: "touch-btn top", text: "II" }, root);
+    pause.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      if (this.game.flow && this.game.flow.openPause) this.game.flow.openPause();
+    });
+    this.el.inv = inv;
+    this.el.pause = pause;
+    root.style.display = "none";
+  }
+  _holdButton(id, label, onChange) {
+    const b = this._mk("button", { id, class: "touch-btn", text: label }, this.root);
+    const release = (e) => {
+      if (!this._btn.has(e.pointerId)) return;
+      this._btn.delete(e.pointerId);
+      b.classList.remove("on");
+      onChange(false);
+    };
+    b.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      try {
+        b.setPointerCapture(e.pointerId);
+      } catch (_) {
+      }
+      this._btn.set(e.pointerId, release);
+      b.classList.add("on");
+      onChange(true);
+    });
+    b.addEventListener("pointerup", release);
+    b.addEventListener("pointercancel", release);
+    b.addEventListener("lostpointercapture", release);
+    return b;
+  }
+  /* ---- look ------------------------------------------------------------ */
+  // The changed touch with this identifier, if the event carries it.
+  _find(e, id) {
+    for (let i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === id) return e.changedTouches[i];
+    return null;
+  }
+  _lookDown(e) {
+    e.preventDefault();
+    if (this._lookId !== null) return;
+    const t = e.changedTouches[0];
+    this._lookId = t.identifier;
+    this._lookX = t.clientX;
+    this._lookY = t.clientY;
+  }
+  _lookMove(e) {
+    e.preventDefault();
+    const t = this._lookId === null ? null : this._find(e, this._lookId);
+    if (!t) return;
+    this.game.input.addTouchLook(t.clientX - this._lookX, t.clientY - this._lookY);
+    this._lookX = t.clientX;
+    this._lookY = t.clientY;
+  }
+  _lookUp(e) {
+    if (this._lookId !== null && this._find(e, this._lookId)) this._lookId = null;
+  }
+  /* ---- stick ----------------------------------------------------------- */
+  _stickDown(e) {
+    e.preventDefault();
+    if (this._stickId !== null) return;
+    this._stickId = e.changedTouches[0].identifier;
+    this._stickMove(e);
+  }
+  _stickMove(e) {
+    e.preventDefault();
+    const t = this._stickId === null ? null : this._find(e, this._stickId);
+    if (!t) return;
+    const r = this.el.stick.getBoundingClientRect();
+    let dx = (t.clientX - (r.left + r.width / 2)) / STICK_RADIUS;
+    let dy = (t.clientY - (r.top + r.height / 2)) / STICK_RADIUS;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) {
+      dx /= len;
+      dy /= len;
+    }
+    const m = Math.min(1, len);
+    const scale = m < STICK_DEAD ? 0 : (m - STICK_DEAD) / (1 - STICK_DEAD) / m;
+    const input = this.game.input;
+    input.touch.moveX = dx * scale;
+    input.touch.moveY = dy * scale;
+    input.touchAction("sprint", input.touch.moveY < 0 && Math.hypot(input.touch.moveX, input.touch.moveY) >= SPRINT_AT);
+    this.el.nub.style.transform = `translate(calc(-50% + ${dx * STICK_RADIUS}px), calc(-50% + ${dy * STICK_RADIUS}px))`;
+  }
+  _stickUp(e) {
+    if (this._stickId === null || !this._find(e, this._stickId)) return;
+    this._stickId = null;
+    this._resetStick();
+  }
+  _resetStick() {
+    const input = this.game.input;
+    input.touch.moveX = 0;
+    input.touch.moveY = 0;
+    input.touchAction("sprint", false);
+    if (this.el.nub) this.el.nub.style.transform = "translate(-50%, -50%)";
+  }
+  /* ---- per-frame ------------------------------------------------------- */
+  update() {
+    if (!this.enabled || !this.root) return;
+    const g = this.game, f = g.state.flags;
+    const show = f.mode === "play" && !f.paused && !f.inventoryOpen && g.worldActive;
+    if (show !== this.visible) {
+      this.visible = show;
+      this.root.style.display = show ? "block" : "none";
+      g.input.touch.active = show;
+      if (!show) {
+        this._stickId = null;
+        this._lookId = null;
+        this._btn.clear();
+        this._resetStick();
+        g.input.releaseTouch();
+        for (const b of this.root.querySelectorAll(".touch-btn")) b.classList.remove("on");
+      }
+    }
+    if (show && this.el.fly) {
+      const creative = !!(g.player && g.player.isCreative);
+      this.el.fly.style.display = creative ? "" : "none";
+    }
+  }
+};
+
 // js/main.js
 var LOADING_TIPS = [
   "Tip: Hold left mouse to mine, right mouse to place.",
   "Tip: Press E to open your inventory and craft.",
   "Tip: Build a Crafting Table for the 3\xD73 grid.",
+  "Tip: Smelt ore in a Furnace \u2014 right-click it, add fuel and ore.",
+  "Tip: Tools wear out; the bar under the icon shows what is left.",
   "Tip: Torches keep the monsters away at night.",
   "Tip: Press F to toggle creative flight.",
   "Tip: Diamonds hide deep underground.",
@@ -45187,12 +46408,14 @@ async function boot() {
     entities: null,
     inventory: null,
     crafting: null,
+    furnaces: null,
     particles: null,
     audio: null,
     sky: null,
     weather: null,
     hud: null,
     menus: null,
+    touch: null,
     resources: null,
     net: null,
     remotePlayers: null,
@@ -45212,6 +46435,7 @@ async function boot() {
   game.world = new World(game);
   game.inventory = new Inventory(game);
   game.crafting = new Crafting(game);
+  game.furnaces = new Furnaces(game);
   game.particles = new Particles(game);
   game.audio = new AudioSystem(game);
   game.sky = new Sky(game);
@@ -45220,6 +46444,7 @@ async function boot() {
   game.player = new Player(game);
   game.hud = new HUD(game);
   game.menus = new Menus(game);
+  game.touch = new TouchControls(game);
   game.resources = new Resources(game);
   game.net = new NetClient(game);
   game.remotePlayers = new RemotePlayers(game, game.net);
@@ -45229,6 +46454,7 @@ async function boot() {
     "resources",
     "inventory",
     "crafting",
+    "furnaces",
     "particles",
     "audio",
     "sky",
@@ -45236,7 +46462,8 @@ async function boot() {
     "entities",
     "player",
     "hud",
-    "menus"
+    "menus",
+    "touch"
   ];
   for (const name of initOrder) {
     const sys = game[name];
@@ -45342,10 +46569,12 @@ async function boot() {
     game.rng = new RNG(game.seed);
     game.worldgen.setSeed ? game.worldgen.setSeed(game.seed) : game.worldgen.seed = game.seed;
     game.world.reset(game.seed);
+    game.furnaces.reset();
     game.entities.removeAll();
     game.particles.reset && game.particles.reset();
     if (save) {
       game.world.applyEdits(save.edits || []);
+      game.furnaces.load(save.furnaces);
       game.inventory.load(save.inventory);
       game.player.load(save.player);
       game.sky.load(save.sky);
@@ -45421,6 +46650,7 @@ async function boot() {
       savedAt: performance.now() | 0,
       seed: game.seed,
       edits: game.world.serialize().edits,
+      furnaces: game.furnaces.serialize(),
       inventory: game.inventory.serialize(),
       player: game.player.serialize(),
       sky: game.sky.serialize(),
@@ -45448,6 +46678,7 @@ async function boot() {
         if (playing) {
           game.player.update(dt);
           game.entities.update(dt);
+          game.furnaces.update(dt);
         }
         game.world.update(dt, anchor);
         game.particles.update(dt);
@@ -45488,6 +46719,7 @@ async function boot() {
       if (game.resources) game.resources.update(dt);
       game.hud.update(dt);
       game.menus.update(dt);
+      game.touch.update();
     } catch (err) {
       if (!boot._errored) {
         console.error("Loop error:", err);
