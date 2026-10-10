@@ -98,13 +98,18 @@ try {
         note = `tree at ${tx},${tz}`;
       } else note = 'no tree found';
     } else if (spec.view === 'underwater') {
-      // A deep water column near spawn: stand 2 blocks under the surface.
+      // Open water near spawn with a clear column of at least 4 blocks (no ravine
+      // walls): hang 1.2 blocks under the surface.
       let best = null;
-      for (let dx = -90; dx <= 90 && !best; dx++) for (let dz = -90; dz <= 90; dz++) {
-        if (w.heightAt(px + dx, pz + dz) <= 21 && (!best || dx * dx + dz * dz < best.d)) best = { dx, dz, d: dx * dx + dz * dz };
+      for (let dx = -90; dx <= 90; dx++) for (let dz = -90; dz <= 90; dz++) {
+        const d = dx * dx + dz * dz;
+        if (best && d >= best.d) continue;
+        let deep = true;
+        for (let k = -2; k <= 2 && deep; k++) for (let m = -2; m <= 2 && deep; m++) deep = w.heightAt(px + dx + k * 2, pz + dz + m * 2) >= 18 && w.heightAt(px + dx + k * 2, pz + dz + m * 2) <= 24;
+        if (deep) best = { dx, dz, d };
       }
       if (best) {
-        x = px + best.dx + 0.5; z = pz + best.dz + 0.5; y = 26.2; flying = true;
+        x = px + best.dx + 0.5; z = px * 0 + pz + best.dz + 0.5; y = 26.6; flying = true;
         yaw = spec.yaw ?? 0.7; pitch = spec.pitch ?? 0.2;
         note = `underwater at ${px + best.dx},${pz + best.dz}`;
       } else note = 'no deep water found';

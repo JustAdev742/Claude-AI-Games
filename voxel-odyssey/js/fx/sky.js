@@ -127,6 +127,7 @@ export class Sky {
     this._sunLight = [1, 1, 1];
     this._sunOnly = [1, 1, 1];     // direct sun colour without the moonlight floor
     this._horizonLin = [0.4, 0.6, 1];
+    this._underwater = 0;        // 0..1, eased: how submerged the camera is
     this._zenithLin = [0.1, 0.3, 0.8];
     this._elapsed = 0;             // seconds, drives foliage wind sway
 
@@ -478,7 +479,7 @@ export class Sky {
     this._recolorDome(SAMPLE);
     this._orbitBodies(t, SAMPLE);
     this._updateLights(SAMPLE, t);
-    this._updateFog(SAMPLE);
+    this._updateFog(SAMPLE, dt);
     this._updateStars(t);
     this._updateClouds(dt, cam);
   }
@@ -618,13 +619,25 @@ export class Sky {
     }
   }
 
-  _updateFog(p) {
+  _updateFog(p, dt) {
     const engine = this._engine();
     const scene = this._scene();
     // Drive fog + background to the horizon color so the world blends into the
     // sky at distance. Build a hex-less THREE.Color via its rgb setter.
     if (engine && typeof engine.setFogColor === 'function') {
-      _tmpColor.setRGB(p.horizon[0], p.horizon[1], p.horizon[2]);
+      // Submerged: the world closes in to a few blocks of blue-green murk. Eased
+      // in and out so crossing the surface is a quick fade, not a pop.
+      const player = this.game && this.game.player;
+      const under = player && player.eyesUnderWater ? 1 : 0;
+      this._underwater += (under - this._underwater) * Math.min(1, (dt > 0 ? dt : 0.016) * 9);
+      if (this._underwater < 0.002) this._underwater = 0;
+      const uw = this._underwater;
+      const lum = 0.22 + 0.78 * clamp01(p.light);
+      _tmpColor.setRGB(
+        lerp(p.horizon[0], 0.06 * lum + 0.01, uw),
+        lerp(p.horizon[1], 0.30 * lum + 0.02, uw),
+        lerp(p.horizon[2], 0.46 * lum + 0.04, uw),
+      );
       engine.setFogColor(_tmpColor);
       // Widen view by day, tighten a little at night for mood + performance.
       if (typeof engine.setFogRange === 'function') {
@@ -643,6 +656,9 @@ export class Sky {
         const wet = weather ? weather.intensity : 0;
         near *= 1 - 0.35 * wet;
         far *= 1 - 0.45 * wet;
+        // Underwater visibility: about 30 blocks in daylight, less in the dark.
+        near = lerp(near, 0.4, uw);
+        far = lerp(far, 10 + 24 * clamp01(p.light), uw);
         engine.setFogRange(near, far);
       }
     } else if (scene) {

@@ -229,7 +229,19 @@ const FRAG = /* glsl */`
     vec3 lit = albedo * light * ao;
     float alpha = base.a * uOpacity;
 
-    if (uIsWater > 0.5) {
+    if (uIsWater > 0.5 && N.y < -0.5) {
+      // The surface seen from UNDER the water. Looking up inside the critical
+      // angle you see the sky through a bright circular window; outside it the
+      // surface is a mirror of the dark water below.
+      vec2 g = waterSlope(vWorldPos.xz, uTime);
+      vec3 Nu = normalize(vec3(g.x, -1.0, g.y));
+      float cosT = clamp(dot(Nu, V), 0.0, 1.0);
+      float window = smoothstep(0.58, 0.74, cosT);
+      vec3 sky = mix(uHorizon, uZenith, 0.55) * (0.5 + 0.5 * sunVis);
+      vec3 deep = lit * 0.45;
+      lit = mix(deep, sky * 0.9, window);
+      alpha = 0.94;
+    } else if (uIsWater > 0.5) {
       // Fresnel: look straight down and you see through the water; look along
       // it and you see the sky in it.
       float cosT = max(dot(Nl, V), 0.0);
@@ -335,7 +347,9 @@ export function createVoxelMaterials(shared) {
     name: 'voxel-water',
     transparent: true,
     depthWrite: false,          // don't occlude other transparent surfaces
-    side: THREE.FrontSide,
+    // Double-sided: from below, the surface is the "ceiling" of the water, and
+    // the shader draws it as a window onto the sky (see uIsWater below).
+    side: THREE.DoubleSide,
   }, {
     uOpacity: { value: 0.66 },
     uWaveStrength: { value: 0.35 },

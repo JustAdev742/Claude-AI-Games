@@ -83,6 +83,7 @@ export class Player {
     this.onGround = false;
     this.inWater = false;
     this.headUnderwater = false;
+    this.eyesUnderWater = false;
     this.flying = false;
     this.sneaking = false;
     this.sprinting = false;
@@ -314,6 +315,9 @@ export class Player {
     this.headUnderwater = this._isLiquidAt(
       this.position.x, this.position.y + this._eyeY, this.position.z
     );
+    // The name the HUD and the sky look for. Without it the HUD fell back to
+    // `inWater`, tinting the whole screen blue while merely wading.
+    this.eyesUnderWater = this.headUnderwater;
 
     // --- toggles: creative flight via fly action or double-tap jump ---
     const jumpDown = input.action('jump');
