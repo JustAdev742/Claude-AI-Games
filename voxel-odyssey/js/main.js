@@ -41,6 +41,7 @@ import { Sky } from './fx/sky.js';
 import { Weather } from './fx/weather.js';
 import { HUD } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
+import { TouchControls } from './ui/touch.js';
 
 const LOADING_TIPS = [
   'Tip: Hold left mouse to mine, right mouse to place.',
@@ -91,7 +92,7 @@ async function boot() {
     // systems (filled in below)
     worldgen: null, world: null, player: null, entities: null,
     inventory: null, crafting: null, furnaces: null, particles: null, audio: null,
-    sky: null, weather: null, hud: null, menus: null, resources: null,
+    sky: null, weather: null, hud: null, menus: null, touch: null, resources: null,
     net: null, remotePlayers: null,
     // runtime
     dt: 0, elapsed: 0, seed: 0, worldActive: false,
@@ -113,6 +114,7 @@ async function boot() {
   game.player = new Player(game);
   game.hud = new HUD(game);
   game.menus = new Menus(game);
+  game.touch = new TouchControls(game);
   game.resources = new Resources(game);
   // Networking is inert until connect() is called — single-player runs the
   // identical code path with no socket attached.
@@ -124,7 +126,7 @@ async function boot() {
   // straight to World.setAtlas, which needs World's materials to exist.
   const initOrder = [
     'worldgen', 'world', 'resources', 'inventory', 'crafting', 'furnaces', 'particles',
-    'audio', 'sky', 'weather', 'entities', 'player', 'hud', 'menus',
+    'audio', 'sky', 'weather', 'entities', 'player', 'hud', 'menus', 'touch',
   ];
   for (const name of initOrder) {
     const sys = game[name];
@@ -451,6 +453,7 @@ async function boot() {
       if (game.resources) game.resources.update(dt);
       game.hud.update(dt);
       game.menus.update(dt);
+      game.touch.update();
     } catch (err) {
       if (!boot._errored) { console.error('Loop error:', err); boot._errored = true; }
     } finally {

@@ -368,24 +368,59 @@ kbd {
 #debug.show { display: block; }
 
 /* ---- Mobile controls (shown only on touch) ---------------------------- */
-#touch-controls { display: none; }
+#touch-controls { position: absolute; inset: 0; pointer-events: none; display: none; touch-action: none; z-index: 1; }
+/* The hotbar must sit above the look zone or taps on it would turn the camera. */
+body.touch #hotbar { z-index: 3; }
 body.touch #touch-controls { display: block; }
+/* Drag anywhere that is not a control to look around. */
+#touch-look { position: absolute; inset: 0; pointer-events: auto; touch-action: none; }
 .touch-stick {
-  position: absolute; bottom: 24px; left: 24px; width: 120px; height: 120px;
-  border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff22; pointer-events: auto;
+  position: absolute; left: calc(26px + env(safe-area-inset-left)); bottom: calc(26px + env(safe-area-inset-bottom));
+  width: 128px; height: 128px; border-radius: 50%;
+  background: #ffffff14; border: 2px solid #ffffff30; pointer-events: auto; touch-action: none;
 }
 .touch-stick .nub {
-  position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%;
-  transform: translate(-50%, -50%); background: #ffffff33; border: 2px solid #ffffff44;
+  position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: #ffffff44; border: 2px solid #ffffff66;
+  pointer-events: none;
 }
 .touch-btn {
-  position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%;
-  background: #ffffff18; border: 2px solid #ffffff28; color: #fff; font-size: 13px;
+  position: absolute; pointer-events: auto; touch-action: none;
+  width: 68px; height: 68px; border-radius: 50%; padding: 0;
+  background: #ffffff1c; border: 2px solid #ffffff38; color: #fff; font: 600 13px var(--font);
   display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent; text-shadow: 1px 1px 0 #0008;
 }
-#touch-jump { right: 28px; bottom: 110px; }
-#touch-place { right: 100px; bottom: 40px; }
-#touch-break { right: 28px; bottom: 40px; }
+.touch-btn.on { background: #ffffff55; border-color: #ffffffaa; }
+.touch-btn.small { width: 52px; height: 52px; font-size: 11px; }
+.touch-btn.top { width: 46px; height: 46px; border-radius: 12px; font-size: 12px; top: calc(12px + env(safe-area-inset-top)); }
+#touch-break { right: calc(24px + env(safe-area-inset-right)); bottom: calc(40px + env(safe-area-inset-bottom)); width: 78px; height: 78px; }
+#touch-place { right: calc(112px + env(safe-area-inset-right)); bottom: calc(30px + env(safe-area-inset-bottom)); }
+#touch-jump  { right: calc(34px + env(safe-area-inset-right)); bottom: calc(132px + env(safe-area-inset-bottom)); }
+#touch-sneak { right: calc(112px + env(safe-area-inset-right)); bottom: calc(110px + env(safe-area-inset-bottom)); }
+#touch-fly   { right: calc(190px + env(safe-area-inset-right)); bottom: calc(60px + env(safe-area-inset-bottom)); }
+/* Left of the day/night dial, which owns the top-right corner. */
+#touch-inv   { right: calc(150px + env(safe-area-inset-right)); }
+#touch-pause { right: calc(96px + env(safe-area-inset-right)); }
+
+/* Small screens: shrink the HUD so it fits beside the controls. */
+@media (max-height: 520px), (max-width: 720px) {
+  #hotbar .slot { width: 40px; height: 40px; border-radius: 6px; }
+  #hotbar .slot canvas { width: 30px !important; height: 30px !important; }
+  #hotbar .slot .key { display: none; }
+  #info-panel { transform: scale(0.8); transform-origin: top left; }
+  .pip { width: 12px; height: 12px; }
+  #status-bars { bottom: 62px; }
+}
+/* Portrait phones: lift the controls above the hotbar. */
+@media (orientation: portrait) and (max-width: 720px) {
+  body.touch .touch-stick { bottom: calc(86px + env(safe-area-inset-bottom)); }
+  body.touch #touch-break { bottom: calc(100px + env(safe-area-inset-bottom)); }
+  body.touch #touch-place { bottom: calc(92px + env(safe-area-inset-bottom)); right: calc(112px + env(safe-area-inset-right)); }
+  body.touch #touch-jump { bottom: calc(190px + env(safe-area-inset-bottom)); }
+  body.touch #touch-sneak { bottom: calc(172px + env(safe-area-inset-bottom)); }
+  body.touch #touch-fly { bottom: calc(122px + env(safe-area-inset-bottom)); }
+}
 
 /* ---- Misc helpers ------------------------------------------------------ */
 .hidden { display: none !important; }

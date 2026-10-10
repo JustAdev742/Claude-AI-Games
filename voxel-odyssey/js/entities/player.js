@@ -53,6 +53,8 @@ const PLACE_COOLDOWN = 0.18;         // seconds between right-click placements w
 const ATTACK_COOLDOWN = 0.45;        // seconds between melee swings
 
 const IFRAME_TIME = 0.5;             // invulnerability window after taking a hit
+// A finger drag needs a little more gain than a mouse to turn the same angle.
+const TOUCH_LOOK = 1.5;
 const FALL_SAFE = 3.2;               // blocks of fall that cause no damage
 const FALL_DAMAGE_PER_BLOCK = 1;     // hp per block beyond the safe distance
 const DROWN_GRACE = 11;              // seconds of held breath before drowning
@@ -258,10 +260,12 @@ export class Player {
       const d = input.lookDelta(settings.lookSmoothing);
       dx = d.dx;
       dy = d.dy;
-    } else if (input.touch && input.touch.active) {
-      // Touch look deltas (already in pixel-ish units).
-      dx = input.touch.mx || 0;
-      dy = input.touch.my || 0;
+    }
+    if (input.touch && input.touch.active) {
+      // Touch-drag look: pixel deltas, the same units as a mouse.
+      const t = input.consumeTouchLook();
+      dx += t.dx * TOUCH_LOOK;
+      dy += t.dy * TOUCH_LOOK;
     }
 
     const invert = settings.invertY ? -1 : 1;
@@ -750,7 +754,6 @@ export class Player {
     // ===== LEFT MOUSE =====
     const leftHeld = input.mouseDown ? input.mouseDown(0) : false;
     const leftPressed = input.mousePressed ? input.mousePressed(0) : false;
-    const touchBreak = input.touch && input.touch.break;
 
     // Touch attack on press: check mob first.
     if (leftPressed) {
@@ -759,7 +762,7 @@ export class Player {
       }
     }
 
-    if ((leftHeld || touchBreak) && hit) {
+    if (leftHeld && hit) {
       this._tickMining(dt, hit, heldKey);
     } else {
       this.mineProgress = 0;
@@ -768,8 +771,7 @@ export class Player {
 
     // ===== RIGHT MOUSE =====
     const rightPressed = input.mousePressed ? input.mousePressed(2) : false;
-    const touchPlace = input.touch && input.touch.place;
-    if ((rightPressed || touchPlace) && this._placeTimer <= 0) {
+    if (rightPressed && this._placeTimer <= 0) {
       this._handleUse(hit, held, heldKey);
       this._placeTimer = PLACE_COOLDOWN;
     }

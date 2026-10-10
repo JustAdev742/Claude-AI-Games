@@ -84,7 +84,13 @@ export class Input {
     this._pointerX = 0;
     this._pointerY = 0;
 
-    this.touch = { mx: 0, my: 0, jump: false, place: false, break: false, active: false };
+    // Touch input (driven by ui/touch.js). The stick is a movement axis in
+    // -1..1 (moveY < 0 = forward); look is accumulated pixel deltas consumed
+    // once per frame; held actions (jump, sneak) are virtual keys; break and
+    // place are routed through the same mouse-button path as a real mouse so a
+    // phone mines, attacks and places by exactly the code a desktop does.
+    this.touch = { moveX: 0, moveY: 0, lookDX: 0, lookDY: 0, active: false, held: new Set() };
+    this._touchPressed = new Set();
 
     // Gamepad state, refreshed each frame from the Gamepad API. Sticks are
     // reported as axis positions, not deltas, so look is applied as a RATE
@@ -393,11 +399,52 @@ export class Input {
 
   action(name) {
     const codes = this.bindings[name];
-    return codes ? this._anyDown(codes) : false;
+    return (codes ? this._anyDown(codes) : false) || this.touch.held.has(name);
   }
   actionPressed(name) {
     const codes = this.bindings[name];
-    return codes ? this._anyPressed(codes) : false;
+    return (codes ? this._anyPressed(codes) : false) || this._touchPressed.has(name);
+  }
+
+  /* ---- touch input ---- */
+
+  // Hold or release a virtual action (the on-screen jump / sneak buttons).
+  touchAction(name, down) {
+    if (down) {
+      if (!this.touch.held.has(name)) { this.touch.held.add(name); this._touchPressed.add(name); }
+    } else {
+      this.touch.held.delete(name);
+    }
+  }
+
+  // One-shot action for this frame (e.g. toggle flight).
+  touchPulse(name) { this._touchPressed.add(name); }
+
+  // Press or release a mouse button on behalf of an on-screen button.
+  touchButton(button, down) {
+    if (down) {
+      if (!this.buttons.has(button)) { this.buttons.add(button); this._buttonPressed.add(button); }
+    } else if (this.buttons.has(button)) {
+      this.buttons.delete(button);
+      this._buttonReleased.add(button);
+    }
+  }
+
+  addTouchLook(dx, dy) { this.touch.lookDX += dx; this.touch.lookDY += dy; }
+
+  consumeTouchLook() {
+    const d = { dx: this.touch.lookDX, dy: this.touch.lookDY };
+    this.touch.lookDX = 0; this.touch.lookDY = 0;
+    return d;
+  }
+
+  // Let go of everything the touch UI is holding (it was hidden or interrupted).
+  releaseTouch() {
+    this.touch.moveX = 0; this.touch.moveY = 0;
+    this.touch.lookDX = 0; this.touch.lookDY = 0;
+    for (const a of [...this.touch.held]) this.touchAction(a, false);
+    this.touchButton(0, false);
+    this.touchButton(2, false);
   }
   setBinding(name, codes) { this.bindings[name] = codes; }
 
@@ -438,7 +485,7 @@ export class Input {
     if (this.action('back')) z += 1;
     if (this.action('forward')) z -= 1;
     // include touch joystick
-    x += this.touch.mx; z += this.touch.my;
+    x += this.touch.moveX; z += this.touch.moveY;
     // ...and the gamepad's left stick. Added rather than replacing, so a
     // player can use stick and keys together without either winning.
     x += this.gamepad.moveX; z += this.gamepad.moveZ;
@@ -548,6 +595,7 @@ export class Input {
     this._released.clear();
     this._buttonPressed.clear();
     this._buttonReleased.clear();
+    this._touchPressed.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
   }

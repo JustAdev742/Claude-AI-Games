@@ -143,6 +143,12 @@ export class HUD {
 
       const key = this._el('span', { cls: 'key', text: String(i + 1), parent: slotEl });
       const count = this._el('span', { cls: 'count', parent: slotEl });
+      // Tap / click a slot to select it (the only way to switch items on a phone).
+      slotEl.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const inv = this.game && this.game.inventory;
+        if (inv && typeof inv.setSelected === 'function') inv.setSelected(i);
+      });
       const dur = this._el('div', { cls: 'dur', parent: slotEl });
       const durFill = document.createElement('i');
       dur.appendChild(durFill);
