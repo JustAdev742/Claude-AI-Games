@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sky Beacon Plaza preview</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #bfe3f7; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+  #hint { position: fixed; left: 16px; bottom: 16px; padding: 8px 12px; border-radius: 8px;
+          background: rgba(255,255,255,.85); color: #223; font-size: 14px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hint">Preview of attraction.ts. Drag to orbit, scroll to zoom.</div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#bfe3f7");
+scene.fog = new THREE.Fog("#bfe3f7", 180, 420);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 1000);
+camera.position.set(95, 60, 120);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 18, 0);
+controls.update();
+
+scene.add(new THREE.HemisphereLight("#ffffff", "#7fa56a", 1.1));
+const sun = new THREE.DirectionalLight("#fff4dd", 2.2);
+sun.position.set(-60, 120, 80);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, near: 10, far: 400 });
+scene.add(sun);
+
+// Delightex is Z-up; three.js is Y-up, so (x, y, z) -> (x, z, -y).
+function part(mesh) {
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+  return {
+    move(x, y, z) { mesh.position.set(x, z, -y); },
+    paint(hex) { mesh.material.color.set(hex); },
+  };
+}
+const mat = (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.8 });
+
+const tasks = [];
+const g = {
+  cuboid(x, y, z, w, d, h, hex) {
+    const p = part(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(hex)));
+    p.move(x, y, z + h / 2);
+    return p;
+  },
+  cylinder(x, y, z, r, h, hex) {
+    const p = part(new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 32), mat(hex)));
+    p.move(x, y, z + h / 2);
+    return p;
+  },
+  cone(x, y, z, r, h, hex) {
+    const p = part(new THREE.Mesh(new THREE.ConeGeometry(r, h, 32), mat(hex)));
+    p.move(x, y, z + h / 2);
+    return p;
+  },
+  ball(x, y, z, r, hex) {
+    const p = part(new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mat(hex)));
+    p.move(x, y, z);
+    return p;
+  },
+  label(x, y, z, text) {
+    const c = document.createElement("canvas");
+    c.width = 512; c.height = 96;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "rgba(20,24,40,.85)";
+    ctx.beginPath(); ctx.roundRect(0, 0, 512, 96, 20); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 44px system-ui, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(text, 256, 50);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) }));
+    s.scale.set(16, 3, 1);
+    s.position.set(x, z, -y);
+    scene.add(s);
+  },
+  every(fn, period) { tasks.push({ fn, period, next: 0 }); },
+};
+
+/*__SCENE__*/
+buildAttraction(g);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  for (const k of tasks) if (t >= k.next) { k.fn(t); k.next = t + k.period; }
+  controls.update();
+  renderer.render(scene, camera);
+  window.__frames = (window.__frames || 0) + 1;
+});
+</script>
+</body>
+</html>
